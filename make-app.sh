@@ -28,8 +28,13 @@ cp "$REPO_DIR/Info.plist" "$APP_PATH/Contents/Info.plist"
 printf 'APPL????' > "$APP_PATH/Contents/PkgInfo"
 
 echo "==> Signing (ad-hoc)"
-# Ad-hoc signing with a stable identifier keeps the Accessibility (TCC) grant across rebuilds.
-codesign --force --sign - --identifier "com.zernonia.mcgrammar" "$APP_PATH"
+# TCC stores the Accessibility grant against the bundle's *designated requirement*. Left to
+# itself, codesign gives an ad-hoc signature a DR that pins the exact cdhash — so every rebuild
+# produces a new hash, silently invalidating the grant while System Settings still shows a ticked
+# (now stale) McGrammar entry. Pinning the DR to the identifier instead keeps the grant across
+# rebuilds. --identifier alone does NOT do this: it sets the bundle ID, not the requirement.
+codesign --force --sign - --identifier "com.zernonia.mcgrammar" \
+  -r='designated => identifier "com.zernonia.mcgrammar"' "$APP_PATH"
 codesign --verify --verbose=1 "$APP_PATH" 2>&1 | sed 's/^/    /'
 
 echo "==> Refreshing the Services cache"

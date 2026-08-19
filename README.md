@@ -59,6 +59,13 @@ The grant attaches to the *launching* process. If you run the binary straight fr
 macOS asks Terminal for the permission, not McGrammar — always test the hotkey from
 `~/Applications/McGrammar.app`.
 
+**If McGrammar keeps asking although the checkbox is already ticked**, the listed entry is stale.
+macOS matches the grant against the bundle's designated requirement, and a bundle signed before
+this was pinned to an exact `cdhash`, so any rebuild invalidated it while leaving the ticked entry
+behind. Remove **McGrammar** from the Accessibility list with the **−** button, then relaunch and
+allow it once. Bundles built by the current `make-app.sh` pin the requirement to the bundle
+identifier instead, so the grant now survives rebuilds.
+
 ### If the Services menu item does not appear
 
 macOS caches the Services menu aggressively. This looks like a bug and is not one.

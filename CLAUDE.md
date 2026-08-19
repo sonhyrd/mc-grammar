@@ -52,8 +52,15 @@ Claude Code CLI. Two independent trigger paths: a global hotkey (⌃⌥G) and an
 
 ### Bundle
 - `LSUIElement = true` plus `NSApp.setActivationPolicy(.accessory)` — menu bar only, no Dock icon.
-- Ad-hoc `codesign --force --sign -` with a stable identifier, so Accessibility (TCC) grants
-  survive rebuilds. Kill any running instance before replacing the bundle.
+- Ad-hoc `codesign --force --sign -` **plus an explicit designated requirement**:
+  `-r='designated => identifier "com.zernonia.mcgrammar"'`. This is what makes Accessibility (TCC)
+  grants survive rebuilds. `--identifier` alone does NOT: it sets the bundle ID in the code
+  directory, while codesign still derives a DR that pins the exact `cdhash`. Every rebuild then
+  changes the hash and silently voids the grant, and the symptom is nasty — System Settings keeps
+  showing a ticked McGrammar entry that no longer matches the binary, so the app re-prompts while
+  the user is looking at a checkbox that says it is already allowed. Verify after any change to the
+  signing step with `codesign -d --requirements - <app>`; it must print the identifier form, not a
+  `cdhash H"..."`. Kill any running instance before replacing the bundle.
 - Accessibility permission attaches to the *launching* process — test the hotkey from the .app,
   never from a terminal-launched binary.
 
