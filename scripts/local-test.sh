@@ -7,6 +7,10 @@ set -uo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR"
 
+# Scratch space for captured stderr, removed on every exit path including Ctrl-C.
+TMP_DIR="$(mktemp -d -t mcgrammar-test)"
+trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+
 PASS=0
 FAIL=0
 pass() { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
@@ -47,11 +51,11 @@ fi
 
 step "4. Terminal round trip through claude -p"
 if [ -n "$CLAUDE_BIN" ]; then
-  OUT="$(echo "helo wrold, this are a test" | "$CLAUDE_BIN" -p "Fix grammar. Output only the corrected text." --max-turns 1 2>/tmp/mcgrammar-claude-err)"
+  OUT="$(echo "helo wrold, this are a test" | "$CLAUDE_BIN" -p "Fix grammar. Output only the corrected text." --max-turns 1 2>"$TMP_DIR/claude-err")"
   if [ -n "$OUT" ]; then
     pass "claude answered: $OUT"
   else
-    fail "claude produced no output. stderr: $(head -c 300 /tmp/mcgrammar-claude-err)"
+    fail "claude produced no output. stderr: $(head -c 300 "$TMP_DIR/claude-err")"
   fi
 else
   fail "skipped — no claude binary"
@@ -89,6 +93,18 @@ if [ -x "$BIN" ]; then
 else
   fail "no binary to run at $BIN"
 fi
+
+step "8. Leftovers"
+WORKSPACE="$HOME/Library/Application Support/McGrammar/cli-workspace"
+LEFTOVER=$(find "$HOME/.claude/projects" -maxdepth 2 -type d -name '*McGrammar-cli-workspace*' -exec find {} -name '*.jsonl' \; 2>/dev/null | wc -l | tr -d ' ')
+if [ "${LEFTOVER:-0}" = "0" ]; then
+  pass "No Claude CLI transcripts left in McGrammar's workspace"
+else
+  note "$LEFTOVER transcript(s) left under ~/.claude/projects for McGrammar's workspace"
+  note "Expected 0 — the app purges them after each fix. Report this if it persists."
+fi
+[ -d "$WORKSPACE" ] && pass "CLI workspace is a directory McGrammar owns: $WORKSPACE" \
+  || note "CLI workspace not created yet (no fix has run from the app)"
 
 step "Summary"
 printf '  %d passed, %d failed\n\n' "$PASS" "$FAIL"

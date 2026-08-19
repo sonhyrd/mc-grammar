@@ -57,8 +57,27 @@ Claude Code CLI. Two independent trigger paths: a global hotkey (⌃⌥G) and an
 - Accessibility permission attaches to the *launching* process — test the hotkey from the .app,
   never from a terminal-launched binary.
 
-### Privacy
+### Privacy and cleanup
 - Never log, cache, or persist user text anywhere. The README states this as a guarantee.
+- The CLI itself persists what the app does not: `claude -p` writes a session transcript containing
+  the corrected text under `~/.claude/projects/<cwd slug>/`. The child therefore runs in
+  `~/Library/Application Support/McGrammar/cli-workspace` so those transcripts land in a project
+  folder only McGrammar causes to exist, and `Transcripts.purge` deletes them after every fix.
+  Keep that purge narrow — `.jsonl` only, marker-matched folder only, modified-during-this-run
+  only — so an unknown CLI layout degrades to a no-op instead of deleting someone's history.
+- Every run must leave the machine as it found it: no temp files, no stray child processes, and the
+  user's clipboard byte-identical to before. `--selftest` and `scripts/local-test.sh` both assert
+  the transcript half of this; do not let it regress.
+
+### Process and clipboard lifecycle
+- If `process.run()` throws, close all three pipe write ends by hand and `group.wait()` before
+  returning. No spawn means nothing else will ever close them, and the drain closures would block
+  on `read()` forever — a leaked thread and three descriptors per failed launch.
+- The 60s watchdog sends SIGTERM, then SIGKILL after a 5s grace. Without the escalation a wedged
+  child blocks `waitUntilExit` indefinitely and the fix never completes.
+- The hotkey path stays "busy" until the clipboard has been restored, not merely until Claude
+  answers. Releasing the guard earlier lets a second trigger snapshot the correction still sitting
+  on the pasteboard, permanently losing the user's original clipboard.
 
 ## Testing
 

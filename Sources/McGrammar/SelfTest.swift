@@ -82,6 +82,16 @@ enum SelfTest {
             failures += 1
         }
 
+        // 6. Nothing should be left behind by the run that just happened.
+        let leftover = Transcripts.pendingCount()
+        if leftover == 0 {
+            print("✓  No CLI transcripts left behind (\(Transcripts.workspaceURL.path))")
+        } else {
+            print("!  \(leftover) transcript(s) still in McGrammar's CLI workspace.")
+            print("   Expected 0 — the cleanup either did not match the CLI's storage layout or")
+            print("   another fix was running concurrently. Inspect ~/.claude/projects.")
+        }
+
         print(String(repeating: "─", count: 52))
         if failures == 0 {
             print("All checks passed.")

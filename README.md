@@ -101,8 +101,26 @@ echo "this are a sentense with mistake" | \
 ## Privacy
 
 Your text goes to exactly one place: the `claude` process on your machine. McGrammar writes no
-logs, keeps no history, and persists nothing to disk. The clipboard is snapshotted in memory only
-long enough to restore it after a paste.
+logs, keeps no history, and persists nothing of its own to disk. The clipboard is snapshotted in
+memory only long enough to restore it after a paste.
+
+One caveat worth stating plainly, because it is not McGrammar's code: the Claude Code CLI keeps a
+session transcript of each `claude -p` run — including the text it corrected — under
+`~/.claude/projects/<slug of the working directory>/`. Left alone those accumulate, one per fix.
+
+So McGrammar runs the CLI in a directory nothing else uses,
+`~/Library/Application Support/McGrammar/cli-workspace`, which isolates those transcripts into
+their own project folder, and deletes them after every fix. The cleanup is deliberately narrow:
+only `.jsonl` files, only inside a project folder whose name carries McGrammar's marker, and only
+ones written during the fix that just ran. If the CLI ever changes where it stores transcripts,
+the cleanup finds nothing and does nothing rather than touching anything else.
+
+Verify it yourself — both of these should report zero leftovers:
+
+```bash
+./scripts/local-test.sh                                        # step 8
+~/Applications/McGrammar.app/Contents/MacOS/McGrammar --selftest
+```
 
 ## Troubleshooting
 
@@ -112,7 +130,8 @@ long enough to restore it after a paste.
 | Hotkey does nothing | Accessibility not granted to *McGrammar.app*, or another app owns ⌃⌥G (the menu tells you which) |
 | Services item missing | see the Services section above |
 | "claude exited with code…" | run the same fix with `--fix` from a terminal to see the CLI's own error |
-| Fix takes forever, then times out | 60s watchdog fired; check `claude -p` works in a terminal |
+| Fix takes forever, then times out | 60s watchdog fired (SIGTERM, then SIGKILL 5s later); check `claude -p` works in a terminal |
+| Transcripts left in `~/.claude/projects` | see Privacy above — report it, the cleanup is meant to leave none |
 
 ## Project layout
 
@@ -132,6 +151,7 @@ Sources/McGrammar/
   HotKey.swift            Carbon RegisterEventHotKey
   StatusIcon.swift        menu bar glyph states
   Toast.swift             permission-free HUD notifications
+  Transcripts.swift       isolates and deletes the CLI's session transcripts
   SelfTest.swift          headless checks
 ```
 

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Errors surfaced by the Claude Code bridge. Every case is user-presentable.
@@ -39,6 +40,8 @@ final class ClaudeRunner {
     static let shared = ClaudeRunner()
 
     static let timeout: TimeInterval = 60
+    /// Grace period between SIGTERM and SIGKILL for a child that refuses to exit.
+    static let killGrace: TimeInterval = 5
 
     /// Tuned and deliberately strict. Loosening this makes Claude rewrite instead of correct.
     static let prompt = """
@@ -153,11 +156,18 @@ final class ClaudeRunner {
         let resolved = binaryPath ?? resolveBinary()
         guard let executable = resolved else { return .failure(.claudeNotFound) }
 
+        // The CLI writes a session transcript keyed to its working directory. Running it in a
+        // dedicated workspace keeps those out of the user's own project histories and lets us
+        // delete ours afterwards — see Transcripts.
+        let startedAt = Date()
+        let workspace = Transcripts.prepareWorkspace()
+        defer { Transcripts.purge(newerThan: startedAt) }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = ["-p", Self.prompt, "--max-turns", "1"]
         process.environment = childEnvironment()
-        process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+        process.currentDirectoryURL = workspace ?? URL(fileURLWithPath: NSHomeDirectory())
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -180,6 +190,13 @@ final class ClaudeRunner {
         do {
             try process.run()
         } catch {
+            // No spawn happened, so nothing will ever close the write ends for us. Close them by
+            // hand or the two drain closures block on read() forever, leaking a thread and three
+            // descriptors on every failed launch.
+            try? stdinPipe.fileHandleForWriting.close()
+            try? stdoutPipe.fileHandleForWriting.close()
+            try? stderrPipe.fileHandleForWriting.close()
+            group.wait()
             return .failure(.launchFailed(error.localizedDescription))
         }
 
@@ -196,13 +213,24 @@ final class ClaudeRunner {
             watchdog.trip()
             process.terminate()
         }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + Self.timeout, execute: killer)
+        // SIGTERM is a request. If the child is wedged and ignores it, escalate — otherwise
+        // waitUntilExit below never returns and the fix never completes.
+        let hardKiller = DispatchWorkItem { [weak process] in
+            guard let process, process.isRunning, watchdog.tripped else { return }
+            kill(process.processIdentifier, SIGKILL)
+        }
+        let queue = DispatchQueue.global(qos: .utility)
+        queue.asyncAfter(deadline: .now() + Self.timeout, execute: killer)
+        queue.asyncAfter(deadline: .now() + Self.timeout + Self.killGrace, execute: hardKiller)
 
         process.waitUntilExit()
         killer.cancel()
+        hardKiller.cancel()
         group.wait()
 
-        if watchdog.tripped {
+        // Both conditions, not just the flag: the watchdog can trip in the microseconds between a
+        // normal exit and our reading of it, and a completed fix must not be reported as a timeout.
+        if watchdog.tripped, process.terminationReason == .uncaughtSignal {
             return .failure(.timedOut(seconds: Int(Self.timeout)))
         }
         guard process.terminationStatus == 0 else {

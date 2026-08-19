@@ -178,17 +178,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         ClaudeRunner.shared.fixAsync(selection) { [weak self] result in
             guard let self else { return }
-            self.isBusy = false
 
             switch result {
             case .success(let corrected):
                 TextCapture.paste(corrected)
                 StatusIcon.shared.setState(.idle)
+                // Stay busy until the clipboard is back to how the user left it. Releasing the
+                // guard at completion instead would let a second ⌃⌥G snapshot the correction that
+                // is still sitting on the pasteboard, and the original would be lost for good.
                 DispatchQueue.main.asyncAfter(deadline: .now() + TextCapture.clipboardRestoreDelay) {
                     TextCapture.restore(snapshot)
+                    self.isBusy = false
                 }
             case .failure(let failure):
                 TextCapture.restore(snapshot)
+                self.isBusy = false
                 StatusIcon.shared.flashError()
                 Toast.shared.show(failure.description, isError: true, duration: 5)
             }
