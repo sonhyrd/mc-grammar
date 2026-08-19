@@ -44,7 +44,16 @@ Both exist on purpose: whichever one a given app blocks, the other usually works
 
 ### Granting Accessibility (hotkey only)
 
-System Settings → Privacy & Security → Accessibility → enable **McGrammar**.
+The first launch of a newly installed bundle asks for it: macOS shows a
+"McGrammar would like to control this computer using accessibility features" dialog with an
+**Open System Settings** button. Declining is harmless — the Services path never needs the
+permission, and the menu bar dropdown keeps an "Accessibility: not granted" item that re-opens
+the pane whenever you want it.
+
+To grant it by hand: System Settings → Privacy & Security → Accessibility → enable **McGrammar**.
+
+macOS shows that dialog at most once per app identity, so if you have dismissed it before you
+will only get the settings pane, not a new prompt.
 
 The grant attaches to the *launching* process. If you run the binary straight from a terminal,
 macOS asks Terminal for the permission, not McGrammar — always test the hotkey from

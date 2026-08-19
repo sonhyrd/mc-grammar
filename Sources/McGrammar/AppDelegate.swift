@@ -28,6 +28,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ClaudeRunner.shared.resolveBinary()
             DispatchQueue.main.async { self.refreshMenuState() }
         }
+
+        promptForAccessibilityOnFirstLaunch()
+    }
+
+    /// macOS shows the "McGrammar would like to control this computer" dialog at most once per
+    /// app identity, and only in response to a call from the running app — a build script cannot
+    /// trigger it. So ask once, on the first launch of a freshly installed bundle, rather than
+    /// leaving the user to discover the menu item. The Services path never needs this, which is
+    /// why a decline is silent: the app stays fully usable.
+    private func promptForAccessibilityOnFirstLaunch() {
+        let key = "hasPromptedForAccessibility"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        guard !TextCapture.hasAccessibilityPermission else {
+            UserDefaults.standard.set(true, forKey: key)
+            return
+        }
+        UserDefaults.standard.set(true, forKey: key)
+        TextCapture.requestAccessibilityPermission()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
