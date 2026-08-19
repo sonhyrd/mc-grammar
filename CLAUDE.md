@@ -70,8 +70,18 @@ Claude Code CLI. Two independent trigger paths: a global hotkey (⌃⌥G) and an
   the corrected text under `~/.claude/projects/<cwd slug>/`. The child therefore runs in
   `~/Library/Application Support/McGrammar/cli-workspace` so those transcripts land in a project
   folder only McGrammar causes to exist, and `Transcripts.purge` deletes them after every fix.
-  Keep that purge narrow — `.jsonl` only, marker-matched folder only, modified-during-this-run
-  only — so an unknown CLI layout degrades to a no-op instead of deleting someone's history.
+  Keep that purge narrow — `.jsonl` only, marker-matched folder only — so an unknown CLI layout
+  degrades to a no-op instead of deleting someone's history. Do **not** re-add a modification-time
+  filter: it sounds safer and leaks. A transcript that misses its own run's purge (flushed late,
+  delete failed, app quit mid-fix) is then older than every later cutoff and survives for good.
+  The folder is ours by construction, so sweeping all of it is both safe and the point.
+- `prepareWorkspace()` returning nil must fail the fix (`.workspaceUnavailable`), never fall back
+  to the home directory: transcripts there land in an unmarked project folder that the purge and
+  `pendingCount` both ignore, so they would pile up while the self-test still reported a clean
+  workspace. The temp-directory fallback exists because its path still carries the marker.
+- A tripped watchdog is a timeout, full stop. Do not also require `terminationReason ==
+  .uncaughtSignal`: a child that catches SIGTERM and exits 0 having flushed a partial answer would
+  then be reported as success, and that truncated text gets pasted over the user's selection.
 - Every run must leave the machine as it found it: no temp files, no stray child processes, and the
   user's clipboard byte-identical to before. `--selftest` and `scripts/local-test.sh` both assert
   the transcript half of this; do not let it regress.

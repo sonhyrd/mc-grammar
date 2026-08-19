@@ -22,14 +22,65 @@ login rather than an API org.
 
 ## Install
 
+There is no download — you build it on your own Mac, which takes about a minute. That is
+deliberate: the app is ad-hoc signed locally, so it never passes through Gatekeeper quarantine and
+you can read every line of what you are running.
+
+**1. Check the prerequisites.** This must print corrected text, not an error:
+
+```bash
+echo "helo wrold, this are a test" | claude -p "Fix grammar. Output only the corrected text." --max-turns 1
+```
+
+If `claude` is not found, install Claude Code and run `claude login` first. If it answers but you
+are on the free plan, it will fail — Claude Code needs a paid plan.
+
+**2. Build and install:**
+
 ```bash
 git clone https://github.com/zernonia/mc-grammar.git
 cd mc-grammar
-./scripts/local-test.sh   # verify everything before installing
+./scripts/local-test.sh   # pre-flight: toolchain, CLI, plist, build, a real fix
 ./make-app.sh             # build → ~/Applications/McGrammar.app → launch
 ```
 
-The menu bar shows `✒︎` when idle, `⋯` while Claude is working, `✒︎!` briefly on an error.
+`local-test.sh` should end with `0 failed`. It is worth running: it catches the common setup
+problems (no paid plan, an `ANTHROPIC_API_KEY` shadowing your login, `claude` missing from the
+login shell's PATH) before you go looking for bugs in the app.
+
+**3. Allow Accessibility when asked.** On first launch macOS shows
+"McGrammar would like to control this computer using accessibility features". Click **Open System
+Settings** and enable McGrammar. This is only needed for the ⌃⌥G hotkey — see below. Declining is
+fine; the Services menu path works without it.
+
+**4. Try it.** Open TextEdit or Notes, type `this are a sentense with mistake`, select it, and
+press ⌃⌥G. A few seconds later it is replaced.
+
+The menu bar shows `✒︎` when idle, `⋯` while Claude is working, `✒︎!` briefly on an error. Click it
+for the resolved `claude` path, the Accessibility state, and Quit.
+
+### Updating
+
+```bash
+git pull && ./make-app.sh
+```
+
+Your Accessibility grant survives rebuilds: the bundle pins its designated requirement to the
+bundle identifier rather than to the binary's hash.
+
+### Uninstalling
+
+```bash
+rm -rf ~/Applications/McGrammar.app
+rm -rf "$HOME/Library/Application Support/McGrammar"
+rm -rf ~/.claude/projects/*McGrammar-cli-workspace   # the CLI's (already emptied) project folder
+defaults delete com.zernonia.mcgrammar 2>/dev/null
+tccutil reset Accessibility com.zernonia.mcgrammar
+```
+
+Quit the app from the menu bar first. The third line removes the folder the Claude Code CLI made
+for McGrammar's working directory — the transcripts inside were deleted as each fix finished, but
+the empty folder itself stays behind.
 
 ## The two ways to fix text
 
@@ -41,6 +92,20 @@ The menu bar shows `✒︎` when idle, `⋯` while Claude is working, `✒︎!` 
 | Caveat | some apps block synthetic keystrokes | the calling app freezes while Claude thinks |
 
 Both exist on purpose: whichever one a given app blocks, the other usually works.
+
+The Services item also gets a system shortcut, **⌘⌃⇧G**, remappable under System Settings →
+Keyboard → Keyboard Shortcuts → Services.
+
+### Where each path works
+
+Because the service declares a return type, macOS only offers it where it can replace what you
+selected — so it appears for **editable** text (a document, a text field, a compose window) and
+not for read-only text such as an article body or a PDF.
+
+**Chrome, and Electron apps generally, do not show Services in their right-click menu.** Those
+menus are drawn by the app itself rather than by macOS, and they simply leave Services out. It is
+not a McGrammar bug and nothing in the app can change it. In Chrome, use ⌃⌥G, or reach the same
+service from the menu bar via **Chrome → Services**. This is exactly why both paths exist.
 
 ### Granting Accessibility (hotkey only)
 
@@ -126,10 +191,18 @@ session transcript of each `claude -p` run — including the text it corrected �
 
 So McGrammar runs the CLI in a directory nothing else uses,
 `~/Library/Application Support/McGrammar/cli-workspace`, which isolates those transcripts into
-their own project folder, and deletes them after every fix. The cleanup is deliberately narrow:
-only `.jsonl` files, only inside a project folder whose name carries McGrammar's marker, and only
-ones written during the fix that just ran. If the CLI ever changes where it stores transcripts,
-the cleanup finds nothing and does nothing rather than touching anything else.
+their own project folder, and deletes every one of them after every fix.
+
+The cleanup is deliberately narrow: `.jsonl` files only, and only inside a project folder whose
+name carries McGrammar's marker — a folder that exists only because McGrammar created the working
+directory it is named after. If the CLI ever changes where it stores transcripts, the cleanup
+finds nothing and does nothing rather than touching anything else.
+
+It sweeps the whole folder rather than only the fix that just ran. Anything left behind by an
+interrupted run — the app quit mid-fix, a delete that failed once — is collected by the next fix
+instead of sitting there for good. And if the private workspace cannot be created at all,
+McGrammar falls back to a temp directory that still carries the marker; if that fails too, the fix
+returns an error rather than running the CLI somewhere it cannot clean up afterwards.
 
 Verify it yourself — both of these should report zero leftovers:
 
@@ -145,6 +218,9 @@ Verify it yourself — both of these should report zero leftovers:
 | Menu says "Claude CLI: not found" | `claude login` in a terminal, then **Re-detect Claude CLI** in the menu |
 | Hotkey does nothing | Accessibility not granted to *McGrammar.app*, or another app owns ⌃⌥G (the menu tells you which) |
 | Services item missing | see the Services section above |
+| No Services item in Chrome / Slack / VS Code | expected — those draw their own menus. Use ⌃⌥G, or the app's own **menu bar → Services** |
+| Item missing on read-only text | expected — it only appears where the selection is editable |
+| Accessibility keeps prompting although the box is ticked | the listed entry is stale. `tccutil reset Accessibility com.zernonia.mcgrammar`, then relaunch and allow once |
 | "claude exited with code…" | run the same fix with `--fix` from a terminal to see the CLI's own error |
 | Fix takes forever, then times out | 60s watchdog fired (SIGTERM, then SIGKILL 5s later); check `claude -p` works in a terminal |
 | Transcripts left in `~/.claude/projects` | see Privacy above — report it, the cleanup is meant to leave none |
