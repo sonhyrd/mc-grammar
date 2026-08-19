@@ -28,7 +28,7 @@ final class Toast {
         label.preferredMaxLayoutWidth = 360
 
         let padding: CGFloat = 16
-        let labelSize = label.sizeThatFits(NSSize(width: 360, height: .greatestFiniteMagnitude))
+        let labelSize = label.sizeThatFits(NSSize(width: 360, height: CGFloat.greatestFiniteMagnitude))
         let contentSize = NSSize(
             width: min(max(labelSize.width, 180), 360) + padding * 2,
             height: labelSize.height + padding * 2
