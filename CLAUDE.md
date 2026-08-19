@@ -1,0 +1,92 @@
+# CLAUDE.md — McGrammar
+
+Context and hard invariants for Claude Code sessions in this repository.
+
+## What this is
+
+A macOS menu bar utility (Swift + AppKit, SPM, **zero third-party dependencies**) that corrects the
+user's selected text in any app by shelling out to their locally installed, locally authenticated
+Claude Code CLI. Two independent trigger paths: a global hotkey (⌃⌥G) and an NSServices menu item.
+
+## Invariants — do not violate these
+
+### Credentials
+- **Never** add an API key path, token handling, or any login flow. The app invokes the official
+  `claude` binary the user installed and authenticated themselves. That is the entire compliance
+  position; an API-key mode is a roadmap item to be revisited only against current Anthropic policy.
+- `ClaudeRunner.childEnvironment()` strips `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`. Keep it
+  that way: a key in the environment takes precedence over the subscription login in the CLI.
+- Never use `--bare` mode (API-key only).
+
+### Sync/async structure (`ClaudeRunner`)
+- `fixSync` is the core and blocks its calling thread. `fixAsync` is a thin wrapper for the hotkey
+  path: background queue in, main-thread completion out.
+- **The NSServices handler MUST call `fixSync` directly.** Never wrap `fixAsync` in a semaphore
+  there — the handler runs on the main thread and the completion dispatches back to main, which
+  deadlocks with certainty. This mistake has already been made once on this project.
+
+### Binary discovery
+- Resolve `claude` through a **zsh login shell** (`/bin/zsh -l -c 'command -v claude'`) and cache it.
+  GUI-launched apps do not inherit the terminal PATH — this is the #1 silent failure mode.
+- Keep the disk fallback list (`~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`,
+  `/usr/local/bin`) and keep prepending those to the child PATH.
+- The resolved path (or the not-found warning) must stay visible in the menu bar dropdown.
+
+### Invocation
+- `claude -p "<PROMPT>" --max-turns 1`, with the user's text piped over **stdin** — never
+  interpolated into the argument list or a shell string.
+- 60s watchdog; terminate the process if exceeded.
+- Keep the prompt strict. If preamble ever leaks into the output, switch to `--output-format json`
+  and read the `result` field rather than tightening the prompt further.
+- Drain stdout and stderr concurrently; a blocked pipe buffer wedges the child.
+
+### NSServices (Info.plist)
+- `NSMessage` must exactly equal the `@objc` selector name on `NSApp.servicesProvider`:
+  `fixGrammar` ↔ `fixGrammar(_:userData:error:)`.
+- `NSSendTypes` **and** `NSReturnTypes` both `NSStringPboardType`. Removing `NSReturnTypes` makes
+  the service send-only and selection replacement silently stops working.
+- `NSTimeout` = `120000` ms. The default is far too short for Claude Code spin-up.
+- Register at launch: `NSApp.servicesProvider = provider; NSUpdateDynamicServices()`.
+- macOS caches the Services menu aggressively — `make-app.sh` runs `pbs -flush`/`-update`, and the
+  README documents the manual steps. Do not chase this as a bug.
+
+### Bundle
+- `LSUIElement = true` plus `NSApp.setActivationPolicy(.accessory)` — menu bar only, no Dock icon.
+- Ad-hoc `codesign --force --sign -` with a stable identifier, so Accessibility (TCC) grants
+  survive rebuilds. Kill any running instance before replacing the bundle.
+- Accessibility permission attaches to the *launching* process — test the hotkey from the .app,
+  never from a terminal-launched binary.
+
+### Privacy
+- Never log, cache, or persist user text anywhere. The README states this as a guarantee.
+
+## Testing
+
+- `./scripts/local-test.sh` — full pre-flight (macOS only).
+- `McGrammar --selftest` — headless: CLI discovery, env hygiene, Info.plist wiring, a real fix.
+- `McGrammar --fix` — stdin → corrected text on stdout.
+- The Services path cannot be tested from `swift run`; it requires the .app bundle.
+
+## Roadmap (post-v1, priority order)
+
+1. **Diff preview HUD** before applying: floating panel, Tab = accept, R = regenerate, Esc = cancel.
+   Biggest UX win over blind replacement.
+2. **Streaming** via `--output-format stream-json` for perceived speed.
+3. **Prompt presets** (Fix / Polish / Translate / Casual↔Formal) with a settings window and
+   per-preset hotkeys.
+4. **Async services variant**: return immediately and paste when done. Unblocks the calling app at
+   the cost of requiring Accessibility — make it opt-in.
+5. **Fallback provider toggle**: direct Anthropic API (Haiku) for sub-second fixes. Also the
+   policy hedge.
+6. Per-app tone profiles; fix-line-at-cursor when nothing is selected; notarized release packaging.
+
+## Watch items
+
+- Anthropic's stance on third-party subscription usage changed twice in 2026. Re-read
+  code.claude.com/docs/en/legal-and-compliance before any distribution, and get written sign-off
+  before charging money.
+- Agent SDK / programmatic credit caps may change; heavy users can hit monthly limits.
+- CLI flags (`-p`, `--max-turns`, `--output-format`) are stable today — verify against current docs
+  when upgrading.
+- Some Electron and sandboxed apps expose neither Services nor synthetic keystrokes. Having both
+  paths is the mitigation; do not remove either.

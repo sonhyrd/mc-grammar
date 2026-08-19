@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>McGrammar</string>
+	<key>CFBundleDisplayName</key>
+	<string>McGrammar</string>
+	<key>CFBundleExecutable</key>
+	<string>McGrammar</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.zernonia.mcgrammar</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>McGrammar — local utility. Your text never leaves your machine except through your own Claude Code CLI.</string>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Fix Grammar with McGrammar</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>fixGrammar</string>
+			<key>NSPortName</key>
+			<string>McGrammar</string>
+			<key>NSSendTypes</key>
+			<array>
+				<string>NSStringPboardType</string>
+			</array>
+			<key>NSReturnTypes</key>
+			<array>
+				<string>NSStringPboardType</string>
+			</array>
+			<key>NSTimeout</key>
+			<string>120000</string>
+			<key>NSKeyEquivalent</key>
+			<dict>
+				<key>default</key>
+				<string>@^$g</string>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>
