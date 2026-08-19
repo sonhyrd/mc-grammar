@@ -24,20 +24,31 @@ enum Transcripts {
         return base.appendingPathComponent("McGrammar/cli-workspace", isDirectory: true)
     }
 
+    /// Used only if Application Support is unavailable. The path still carries the marker, so
+    /// transcripts written here remain isolated and purgeable — the invariant survives the fallback.
+    private static var fallbackWorkspaceURL: URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("McGrammar-cli-workspace", isDirectory: true)
+    }
+
     private static var projectsURL: URL {
         URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/projects", isDirectory: true)
     }
 
-    /// Creates the workspace if needed and returns it, or nil if it cannot be created (in which
-    /// case the caller should fall back to the home directory rather than fail the fix).
+    /// Creates the workspace if needed and returns it, or nil if no isolated workspace can be made.
+    ///
+    /// Callers must NOT fall back to the home directory on nil. Transcripts written there land in
+    /// an unmarked project folder that `purge` and `pendingCount` both ignore, so the CLI's copies
+    /// of the user's text would accumulate for good while the self-test still reported a clean
+    /// workspace. Failing the fix is the honest outcome: the promise is that nothing is left on
+    /// disk, and here we cannot keep it.
     static func prepareWorkspace() -> URL? {
-        let url = workspaceURL
-        do {
-            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-            return url
-        } catch {
-            return nil
+        for url in [workspaceURL, fallbackWorkspaceURL] {
+            if (try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)) != nil {
+                return url
+            }
         }
+        return nil
     }
 
     /// Directories under `~/.claude/projects` that belong to our workspace.
@@ -50,27 +61,32 @@ enum Transcripts {
         return (contents ?? []).filter { $0.lastPathComponent.contains(marker) }
     }
 
-    /// Deletes transcripts written at or after `date`. Returns how many were removed.
+    /// Deletes every transcript in our project directories. Returns how many were removed.
+    ///
+    /// Deliberately not filtered by modification time. Restricting the sweep to files written by
+    /// the run that just finished sounds safer but leaks: a transcript that misses its own purge —
+    /// flushed late, delete failed once, app quit or crashed mid-fix — is older than every
+    /// subsequent run's cutoff and so survives for good, holding the user's text forever.
+    ///
+    /// Dropping the date costs nothing, because these directories exist only because McGrammar ran
+    /// the CLI in a working directory it created. The narrowing that matters is unchanged: the
+    /// marker-matched folder, and `.jsonl` only.
     @discardableResult
-    static func purge(newerThan date: Date) -> Int {
-        // One second of slack: filesystem timestamps and our clock reading are not the same clock.
-        let cutoff = date.addingTimeInterval(-1)
+    static func purge() -> Int {
         var removed = 0
         for directory in ourProjectDirectories() {
             let files = (try? FileManager.default.contentsOfDirectory(
                 at: directory,
-                includingPropertiesForKeys: [.contentModificationDateKey],
+                includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles]
             )) ?? []
             for file in files where file.pathExtension == "jsonl" {
-                let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?
-                    .contentModificationDate
-                guard let modified, modified >= cutoff else { continue }
                 do {
                     try FileManager.default.removeItem(at: file)
                     removed += 1
                 } catch {
                     // Best effort by design — a transcript we cannot delete is not worth an alert.
+                    // The next fix sweeps it up, which is exactly what the date filter prevented.
                 }
             }
         }

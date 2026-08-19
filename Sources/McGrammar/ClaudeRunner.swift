@@ -9,6 +9,7 @@ enum FixError: Error, CustomStringConvertible {
     case launchFailed(String)
     case exited(code: Int32, stderr: String)
     case emptyOutput
+    case workspaceUnavailable
 
     var description: String {
         switch self {
@@ -26,6 +27,10 @@ enum FixError: Error, CustomStringConvertible {
             return clipped.isEmpty ? "claude exited with code \(code)." : "claude exited with code \(code): \(clipped)"
         case .emptyOutput:
             return "Claude returned an empty result."
+        case .workspaceUnavailable:
+            return "Could not create McGrammar's private CLI workspace, so the transcript the CLI "
+                + "writes could not be cleaned up afterwards. Check free space and permissions on "
+                + "~/Library/Application Support."
         }
     }
 }
@@ -159,15 +164,17 @@ final class ClaudeRunner {
         // The CLI writes a session transcript keyed to its working directory. Running it in a
         // dedicated workspace keeps those out of the user's own project histories and lets us
         // delete ours afterwards — see Transcripts.
-        let startedAt = Date()
-        let workspace = Transcripts.prepareWorkspace()
-        defer { Transcripts.purge(newerThan: startedAt) }
+        // Never run the CLI somewhere we cannot clean up afterwards — see Transcripts.
+        guard let workspace = Transcripts.prepareWorkspace() else {
+            return .failure(.workspaceUnavailable)
+        }
+        defer { Transcripts.purge() }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = ["-p", Self.prompt, "--max-turns", "1"]
         process.environment = childEnvironment()
-        process.currentDirectoryURL = workspace ?? URL(fileURLWithPath: NSHomeDirectory())
+        process.currentDirectoryURL = workspace
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -228,9 +235,14 @@ final class ClaudeRunner {
         hardKiller.cancel()
         group.wait()
 
-        // Both conditions, not just the flag: the watchdog can trip in the microseconds between a
-        // normal exit and our reading of it, and a completed fix must not be reported as a timeout.
-        if watchdog.tripped, process.terminationReason == .uncaughtSignal {
+        // The flag alone, deliberately. Also requiring `terminationReason == .uncaughtSignal`
+        // avoids a spurious timeout when the watchdog trips in the microseconds between a normal
+        // exit and our reading of it — but it fails in the far worse direction: a child that
+        // catches SIGTERM and exits 0 having flushed only part of its answer is then reported as a
+        // success, and that truncated text gets pasted over the user's selection. Fail closed. The
+        // cost is a rare, honest "took longer than 60s" on a fix that finished within a hair of the
+        // deadline; the alternative is silently corrupting the text we were asked to correct.
+        if watchdog.tripped {
             return .failure(.timedOut(seconds: Int(Self.timeout)))
         }
         guard process.terminationStatus == 0 else {
