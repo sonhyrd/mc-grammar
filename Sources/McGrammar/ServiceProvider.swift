@@ -11,9 +11,44 @@ final class ServiceProvider: NSObject {
     /// CRITICAL INVARIANT: this runs on the main thread and must call `fixSync` directly.
     /// Wrapping `fixAsync` in a semaphore here deadlocks — the completion dispatches to main,
     /// which this handler is blocking. Do not "improve" it that way.
+    /// Whether the provider actually implements the selector an `NSMessage` names.
+    ///
+    /// `NSMessage` is a string in Info.plist and nothing checks it at build time: a typo registers
+    /// a menu item that silently does nothing when clicked. `--selftest` asks this so the mismatch
+    /// is caught on the bench instead of by a user.
+    static func responds(to message: String) -> Bool {
+        let selector = NSSelectorFromString("\(message):userData:error:")
+        return ServiceProvider.instancesRespond(to: selector)
+    }
+
+    /// Proofread. The selector name is pinned by `NSMessage` in Info.plist and predates the preset
+    /// split, so it keeps its original spelling — renaming it would unregister the service. It is
+    /// bound to a *preset*, not to whichever preset happens to be the default, so flipping the
+    /// default never changes what this entry does.
+    ///
+    /// CRITICAL INVARIANT: this runs on the main thread and must call `fixSync` directly.
+    /// Wrapping `fixAsync` in a semaphore here deadlocks — the completion dispatches to main,
+    /// which this handler is blocking. Do not "improve" it that way.
     @objc func fixGrammar(
         _ pasteboard: NSPasteboard,
         userData: String?,
+        error: AutoreleasingUnsafeMutablePointer<NSString>?
+    ) {
+        handle(pasteboard, preset: .proofread, error: error)
+    }
+
+    /// Polish. Same contract as `fixGrammar`, same main-thread rule, different preset.
+    @objc func polishText(
+        _ pasteboard: NSPasteboard,
+        userData: String?,
+        error: AutoreleasingUnsafeMutablePointer<NSString>?
+    ) {
+        handle(pasteboard, preset: .polish, error: error)
+    }
+
+    private func handle(
+        _ pasteboard: NSPasteboard,
+        preset: Preset,
         error: AutoreleasingUnsafeMutablePointer<NSString>?
     ) {
         guard let text = pasteboard.string(forType: .string),
@@ -29,7 +64,7 @@ final class ServiceProvider: NSObject {
         StatusIcon.shared.setState(.working, mainThreadBlocked: true)
         // Shorter timeout than the hotkey path: these seconds block the host application's main
         // thread, so a wedged fix should unfreeze it as fast as possible.
-        let result = ClaudeRunner.shared.fixSync(text, timeout: ClaudeRunner.servicesTimeout)
+        let result = ClaudeRunner.shared.fixSync(text, preset: preset, timeout: ClaudeRunner.servicesTimeout)
 
         switch result {
         case .success(let outcome):

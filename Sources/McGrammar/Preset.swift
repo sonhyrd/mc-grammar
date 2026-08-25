@@ -20,6 +20,21 @@ enum Preset: String, CaseIterable {
     /// amount of correction fixes that.
     case polish
 
+    /// The preset the primary gesture runs: the hotkey, the first Services item, the first menu
+    /// item, and `--fix` with no preset flag.
+    ///
+    /// Changing the default is deliberately this one line, so that the change is visible in a diff
+    /// rather than spread across five call sites. Whatever it is set to, the user must be told:
+    /// under Polish they cannot see what was altered, so the toast naming the preset is the only
+    /// signal a rewrite rather than a correction just happened to their text.
+    static let standard: Preset = .proofread
+
+    /// The preset the secondary gesture runs — always whichever one `standard` is not, so the pair
+    /// cannot drift into both being the same thing.
+    static var alternate: Preset {
+        standard == .proofread ? .polish : .proofread
+    }
+
     /// Picks a preset off the command line for `--fix`. Unknown or absent means the default.
     ///
     /// The default is deliberately named at each call site rather than defaulted here, so that

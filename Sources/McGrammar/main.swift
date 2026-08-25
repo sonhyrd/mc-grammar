@@ -11,7 +11,8 @@ if arguments.contains("--help") || arguments.contains("-h") {
         McGrammar — fix grammar in any macOS app using your local Claude Code CLI.
 
         Usage:
-          McGrammar              Launch the menu bar app (⌃⌥D, plus the Services menu item)
+          McGrammar              Launch the menu bar app (⌃⌥D and ⌃⌥⇧D, plus two Services
+                                  menu items)
           McGrammar --selftest   Run headless checks: CLI discovery, permissions, a real fix
           McGrammar --fix        Read text from stdin, write the corrected text.
                                   Add --proofread (default) or --polish to choose a preset.
@@ -27,7 +28,7 @@ if arguments.contains("--selftest") {
 }
 
 if arguments.contains("--fix") {
-    exit(CommandLineFix.run(preset: Preset.fromArguments(arguments, default: .proofread)))
+    exit(CommandLineFix.run(preset: Preset.fromArguments(arguments, default: .standard)))
 }
 
 if arguments.contains("--fixtures") {

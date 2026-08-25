@@ -1,13 +1,21 @@
 import AppKit
+import Carbon.HIToolbox
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private let hotKey = HotKey()
+    /// ⌃⌥D — runs `Preset.standard`.
+    private let standardHotKey = HotKey()
+    /// ⌃⌥⇧D — runs `Preset.alternate`. Both presets get a hotkey deliberately: some Electron and
+    /// sandboxed apps expose no Services menu at all, and the alternate preset is precisely the one
+    /// a user reaches for when the default did something they did not want. It must not be the one
+    /// that is unreachable.
+    private let alternateHotKey = HotKey()
     private let serviceProvider = ServiceProvider()
     private let menu = NSMenu()
 
     private var claudeStatusItem: NSMenuItem?
     private var accessibilityItem: NSMenuItem?
-    private var hotKeyRegistration: HotKeyRegistration = .registrationFailed(noErr)
+    private var standardHotKeyRegistration: HotKeyRegistration = .registrationFailed(noErr)
+    private var alternateHotKeyRegistration: HotKeyRegistration = .registrationFailed(noErr)
     private var isBusy = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -22,8 +30,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.servicesProvider = serviceProvider
         NSUpdateDynamicServices()
 
-        hotKeyRegistration = hotKey.register { [weak self] in
-            self?.fixSelection()
+        standardHotKeyRegistration = standardHotKey.register(
+            keyCode: UInt32(kVK_ANSI_D),
+            modifiers: UInt32(controlKey | optionKey)
+        ) { [weak self] in
+            self?.fixSelection(preset: .standard)
+        }
+        alternateHotKeyRegistration = alternateHotKey.register(
+            keyCode: UInt32(kVK_ANSI_D),
+            modifiers: UInt32(controlKey | optionKey | shiftKey)
+        ) { [weak self] in
+            self?.fixSelection(preset: .alternate)
         }
 
         DispatchQueue.global(qos: .utility).async {
@@ -64,7 +81,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        hotKey.unregister()
+        standardHotKey.unregister()
+        alternateHotKey.unregister()
     }
 
     // MARK: - Menu
@@ -73,13 +91,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
 
         let fixItem = NSMenuItem(
-            title: "Fix Selected Text",
-            action: #selector(fixSelection),
+            title: "\(Preset.standard.displayName) Selected Text",
+            action: #selector(runStandardPreset),
             keyEquivalent: "d"
         )
         fixItem.keyEquivalentModifierMask = [.control, .option]
         fixItem.target = self
         menu.addItem(fixItem)
+
+        let alternateItem = NSMenuItem(
+            title: "\(Preset.alternate.displayName) Selected Text",
+            action: #selector(runAlternatePreset),
+            keyEquivalent: "d"
+        )
+        alternateItem.keyEquivalentModifierMask = [.control, .option, .shift]
+        alternateItem.target = self
+        menu.addItem(alternateItem)
 
         menu.addItem(.separator())
 
@@ -136,9 +163,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Report the actual registration outcome, not just "not active". A hotkey that does
             // nothing looks identical to a broken app from the outside, so the menu is the only
             // place the cause can surface.
-            accessibilityItem?.title = hotKeyRegistration.isRegistered
-                ? "Accessibility: granted (hotkey ⌃⌥D active)"
-                : "Accessibility: granted — hotkey ⌃⌥D \(hotKeyRegistration.detail)"
+            let standardDetail = standardHotKeyRegistration.isRegistered
+                ? "⌃⌥D active"
+                : "⌃⌥D \(standardHotKeyRegistration.detail)"
+            let alternateDetail = alternateHotKeyRegistration.isRegistered
+                ? "⌃⌥⇧D active"
+                : "⌃⌥⇧D \(alternateHotKeyRegistration.detail)"
+            accessibilityItem?.title = "Accessibility: granted (\(standardDetail), \(alternateDetail))"
         } else {
             accessibilityItem?.title = "Accessibility: not granted — click to fix hotkey"
         }
@@ -183,7 +214,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Copy the selection out of the focused app, correct it, paste it back, restore the clipboard.
     /// Requires Accessibility permission because it drives ⌘C/⌘V with synthetic events. Reached
     /// from both ⌃⌥D and the menu item — the Services path does not come through here.
-    @objc private func fixSelection() {
+    @objc private func runStandardPreset() {
+        fixSelection(preset: .standard)
+    }
+
+    @objc private func runAlternatePreset() {
+        fixSelection(preset: .alternate)
+    }
+
+    private func fixSelection(preset: Preset) {
         guard !isBusy else {
             Toast.shared.show("Already working on a fix…")
             return
@@ -216,7 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         StatusIcon.shared.setState(.working)
 
-        ClaudeRunner.shared.fixAsync(selection) { [weak self] result in
+        ClaudeRunner.shared.fixAsync(selection, preset: preset) { [weak self] result in
             guard let self else { return }
 
             switch result {

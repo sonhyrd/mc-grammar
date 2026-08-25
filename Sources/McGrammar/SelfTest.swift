@@ -35,18 +35,27 @@ enum SelfTest {
 
         // 3. Bundle wiring, when running from inside McGrammar.app.
         if let services = Bundle.main.infoDictionary?["NSServices"] as? [[String: Any]] {
-            let message = services.first?["NSMessage"] as? String
-            let returnTypes = services.first?["NSReturnTypes"] as? [String]
-            if message == "fixGrammar" {
-                print("✓  Info.plist declares NSMessage=fixGrammar")
+            // Every NSMessage must name a selector that actually exists on the provider. A typo
+            // here is silent: macOS registers the menu item and the click does nothing.
+            let declared = services.compactMap { $0["NSMessage"] as? String }
+            let expected = ["fixGrammar", "polishText"]
+            if Set(declared) == Set(expected) {
+                print("✓  Info.plist declares both services: \(declared.joined(separator: ", "))")
             } else {
-                print("✗  Info.plist NSMessage is \(message ?? "missing") — must be fixGrammar")
+                print("✗  Info.plist declares \(declared) — expected exactly \(expected)")
                 failures += 1
             }
-            if let returnTypes, !returnTypes.isEmpty {
-                print("✓  Info.plist declares NSReturnTypes (selection replacement will work)")
+            for message in declared where !ServiceProvider.responds(to: message) {
+                print("✗  Info.plist NSMessage=\(message) has no matching @objc selector on ServiceProvider")
+                failures += 1
+            }
+            // NSReturnTypes is what makes a service replace the selection instead of merely
+            // receiving it. Missing on any one entry and that entry silently stops working.
+            let missingReturnTypes = services.filter { ($0["NSReturnTypes"] as? [String])?.isEmpty ?? true }
+            if missingReturnTypes.isEmpty {
+                print("✓  Every service declares NSReturnTypes (selection replacement will work)")
             } else {
-                print("✗  Info.plist is missing NSReturnTypes — the Service would be send-only")
+                print("✗  \(missingReturnTypes.count) service(s) missing NSReturnTypes — they would be send-only")
                 failures += 1
             }
         } else {

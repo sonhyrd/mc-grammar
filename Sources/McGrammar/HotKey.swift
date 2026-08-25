@@ -4,10 +4,9 @@ import Carbon.HIToolbox
 /// Why a `HotKey.register` call ended the way it did.
 ///
 /// This exists because a dead hotkey is indistinguishable from a broken app: nothing happens when
-/// the user presses the keys, and the previous `Bool` return collapsed two very different causes
-/// into one `false`. "Another app owns this combination" is the user's problem to solve and they
-/// can solve it; "the event handler would not install" is ours. The menu has to be able to say
-/// which.
+/// the user presses the keys, and a bare `Bool` return collapsed two very different causes into one
+/// `false`. "Another app owns this combination" is the user's problem to solve and they can solve
+/// it; "the event handler would not install" is ours. The menu has to be able to say which.
 enum HotKeyRegistration {
     case registered
     /// `InstallEventHandler` failed, so no combination was ever attempted.
@@ -40,7 +39,46 @@ enum HotKeyRegistration {
 
 /// Process-wide global hotkey via Carbon's `RegisterEventHotKey`. This is the only API that still
 /// gives a true system-wide shortcut to a non-sandboxed menu bar app without an event tap.
+///
+/// The app registers more than one combination, so dispatch is keyed on the `EventHotKeyID` carried
+/// by the event rather than on a single "current instance" global. An earlier single-slot design
+/// would have silently broken the first hotkey the moment a second one registered — the second
+/// registration would take the slot and the first combination would fire the wrong handler, or
+/// none. The Carbon event handler is likewise installed exactly once for the process, not once per
+/// instance: two handlers on the same target both fire for every hotkey.
 final class HotKey {
+    private var hotKeyRef: EventHotKeyRef?
+    private var handler: (() -> Void)?
+    private var identifier: UInt32?
+
+    /// Every registered instance, keyed by the `EventHotKeyID.id` it registered under. Carbon
+    /// dispatches through a C callback with no context pointer we control, so the routing table
+    /// has to live at file scope.
+    fileprivate static var registry: [UInt32: HotKey] = [:]
+    private static var eventHandler: EventHandlerRef?
+    private static var nextIdentifier: UInt32 = 1
+
+    /// Signature shared by every McGrammar hotkey; the per-hotkey `id` is what distinguishes them.
+    private static let signature = OSType(0x4D43_4752) // 'MCGR'
+
+    /// Installs the process-wide Carbon handler on first use. Returns the failure status, or
+    /// `noErr` if the handler is already installed.
+    private static func installSharedHandlerIfNeeded() -> OSStatus {
+        if eventHandler != nil { return noErr }
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+        return InstallEventHandler(
+            GetApplicationEventTarget(),
+            hotKeyCallback,
+            1,
+            &eventType,
+            nil,
+            &eventHandler
+        )
+    }
+
     /// `eventHotKeyExistsErr` — returned when another process already owns the combination.
     ///
     /// Spelled out rather than imported: the Command Line Tools SDK on this machine ships no Carbon
@@ -50,62 +88,42 @@ final class HotKey {
     /// being silently bucketed as "taken".
     private static let eventHotKeyExistsErr: OSStatus = -9878
 
-    private var hotKeyRef: EventHotKeyRef?
-    private var eventHandler: EventHandlerRef?
-    private var handler: (() -> Void)?
-
-    /// Carbon dispatches through a C callback with no context pointer we control here, so the
-    /// active instance is parked in a file-private global.
-    fileprivate static var active: HotKey?
-
-    /// The one combination McGrammar registers. Inlined rather than parameterised: no caller ever
-    /// passed anything else, and configurable hotkeys are a roadmap item (prompt presets), not a
-    /// need the app has today.
-    private static let keyCode = UInt32(kVK_ANSI_D)
-    private static let modifiers = UInt32(controlKey | optionKey)
-
-    /// Registers ⌃⌥D. The returned value distinguishes the failure causes — see
+    /// Registers one combination. The returned value distinguishes the failure causes — see
     /// `HotKeyRegistration` for why that distinction is worth a type.
     @discardableResult
-    func register(handler: @escaping () -> Void) -> HotKeyRegistration {
+    func register(
+        keyCode: UInt32,
+        modifiers: UInt32,
+        handler: @escaping () -> Void
+    ) -> HotKeyRegistration {
         unregister()
-        self.handler = handler
-        HotKey.active = self
 
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
-        let installStatus = InstallEventHandler(
-            GetApplicationEventTarget(),
-            hotKeyCallback,
-            1,
-            &eventType,
-            nil,
-            &eventHandler
-        )
+        let installStatus = Self.installSharedHandlerIfNeeded()
         guard installStatus == noErr else {
-            // Do not leave a half-registered instance parked in the global: `fire()` would then
-            // reach an object that never installed a handler.
-            self.handler = nil
-            if HotKey.active === self { HotKey.active = nil }
             return .handlerInstallFailed(installStatus)
         }
 
-        let hotKeyID = EventHotKeyID(signature: OSType(0x4D43_4752) /* 'MCGR' */, id: 1)
+        let id = Self.nextIdentifier
+        Self.nextIdentifier += 1
+        self.handler = handler
+        self.identifier = id
+        Self.registry[id] = self
+
+        let hotKeyID = EventHotKeyID(signature: Self.signature, id: id)
         let registerStatus = RegisterEventHotKey(
-            Self.keyCode,
-            Self.modifiers,
+            keyCode,
+            modifiers,
             hotKeyID,
             GetApplicationEventTarget(),
             0,
             &hotKeyRef
         )
+
         if registerStatus == noErr, hotKeyRef != nil {
             return .registered
         }
-        // Leave nothing half-registered behind: the event handler installed successfully above, so
-        // without this an unregistered instance keeps a live handler and stays parked in `active`.
+        // Leave nothing half-registered behind: this instance is already in the routing table, so
+        // without this it would keep a live handler it can never be reached through.
         unregister()
         if registerStatus == Self.eventHotKeyExistsErr {
             return .combinationTaken(registerStatus)
@@ -118,12 +136,13 @@ final class HotKey {
             UnregisterEventHotKey(hotKeyRef)
             self.hotKeyRef = nil
         }
-        if let eventHandler {
-            RemoveEventHandler(eventHandler)
-            self.eventHandler = nil
+        if let identifier {
+            Self.registry.removeValue(forKey: identifier)
+            self.identifier = nil
         }
         handler = nil
-        if HotKey.active === self { HotKey.active = nil }
+        // The shared event handler is deliberately left installed. It is harmless with an empty
+        // registry, and removing it here would break any hotkey still registered.
     }
 
     fileprivate func fire() {
@@ -136,8 +155,21 @@ private func hotKeyCallback(
     _ event: EventRef?,
     _ userData: UnsafeMutableRawPointer?
 ) -> OSStatus {
+    var hotKeyID = EventHotKeyID()
+    let status = GetEventParameter(
+        event,
+        EventParamName(kEventParamDirectObject),
+        EventParamType(typeEventHotKeyID),
+        nil,
+        MemoryLayout<EventHotKeyID>.size,
+        nil,
+        &hotKeyID
+    )
+    guard status == noErr else { return status }
+
+    let id = hotKeyID.id
     DispatchQueue.main.async {
-        HotKey.active?.fire()
+        HotKey.registry[id]?.fire()
     }
     return noErr
 }
