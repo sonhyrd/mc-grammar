@@ -8,8 +8,8 @@ enum CommandLineFix {
     static func run() -> Int32 {
         let input = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? ""
         switch ClaudeRunner.shared.fixSync(input) {
-        case .success(let corrected):
-            print(corrected)
+        case .success(let outcome):
+            print(outcome.text)
             return 0
         case .failure(let failure):
             FileHandle.standardError.write(Data("McGrammar: \(failure.description)\n".utf8))

@@ -33,12 +33,62 @@ Claude Code CLI. Two independent trigger paths: a global hotkey (⌃⌥D) and an
 - The resolved path (or the not-found warning) must stay visible in the menu bar dropdown.
 
 ### Invocation
-- `claude -p "<PROMPT>" --max-turns 1`, with the user's text piped over **stdin** — never
-  interpolated into the argument list or a shell string.
-- 60s watchdog; terminate the process if exceeded.
-- Keep the prompt strict. If preamble ever leaks into the output, switch to `--output-format json`
-  and read the `result` field rather than tightening the prompt further.
+`ClaudeRunner.fixSync` calls `claude` with a deliberately isolated flag set. **The full set is an
+INVARIANT, not a style choice** — every flag was measured (see
+`docs/adr/0001-isolate-the-claude-code-invocation.md`), and dropping one silently reintroduces the
+configuration this app exists to avoid: the user's inherited settings, MCP servers, tool
+permissions, and a ~30,000-token interactive preamble, at Opus pricing ($0.1497/fix instead of
+$0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not a cleanup.
+
+```
+-p <prompt>
+--max-turns 1
+--model claude-haiku-4-5-20251001
+--setting-sources ""
+--tools ""
+--strict-mcp-config
+--system-prompt <one-line role>
+--output-format json
+```
+
+- The **pinned, dated model ID** (`ClaudeRunner.model`) is deliberate, not a placeholder: a
+  floating alias is what put the app on Opus in the first place, invisibly. Bumping it requires
+  re-running `--fixtures`, not just `--selftest`.
+- `--setting-sources ""` and `--tools ""`, not `--settings <file>` — `--settings` *merges* into
+  the user's resolved config rather than replacing it, so it cannot produce an isolated
+  invocation. See the ADR's "Rejected alternatives."
+- **The correction rules live in `-p`, not `--system-prompt`, and that placement is an INVARIANT.**
+  `--system-prompt` is a one-line role only (`"You are a grammar corrector. Output only corrected
+  text."`). Moving the rules into `--system-prompt` reads tidier and measures identically on a
+  short input, but on a long multi-error paragraph it fails roughly half the time — 7/15 correct
+  vs. 14/14 with the rules in `-p` — and the failures are silent: the user's text usually comes
+  back unchanged, occasionally a list of corrections gets pasted over the selection instead of the
+  fix. See the ADR for the full finding. Any change to `ClaudeRunner.prompt` or
+  `ClaudeRunner.systemPrompt` must be verified with `--fixtures` before merging; `--selftest`'s one
+  easy sample would not have caught this.
+- The user's selected text goes over **stdin**, written after the watchdog is armed — never
+  interpolated into `-p`, the rest of the argument list, or a shell string.
+- `MAX_THINKING_TOKENS=0` in the child environment (undocumented CLI env var, not a flag — hence
+  weaker than the rest of this list). This is the single largest latency lever: without it the
+  model spends most of its output budget reasoning about trivial corrections. `--selftest` asserts
+  `thinkingTokens == 0` on every run specifically to catch a future CLI that silently stops
+  honoring it.
+- `--output-format json`, read the `result` field — never parse raw stdout for the corrected text.
+- Watchdog timeouts: **15s** on the hotkey path (`ClaudeRunner.hotkeyTimeout`, also used by
+  `--fix`/`--selftest`), **10s** on the Services path (`ClaudeRunner.servicesTimeout`) — shorter
+  because those seconds block the host application's main thread by design. SIGTERM first, SIGKILL
+  after a 5s grace (`killGrace`) if the child ignores it. A tripped watchdog is a timeout, full
+  stop — see "Privacy and cleanup" for why `terminationReason` is not also checked.
+- `NSTimeout` in Info.plist stays **120000ms** regardless of the above — it bounds how long macOS
+  waits for the whole Services round trip including its own dispatch overhead, not just the child
+  process, and the default is far too short for Claude Code spin-up.
+- `sanitize()` was deleted: nothing in this invocation reaches a shell, so there was nothing to
+  sanitize against — stdin plus `Process.arguments` never touch a shell interpreter.
 - Drain stdout and stderr concurrently; a blocked pipe buffer wedges the child.
+- Real, measured numbers — old vs. isolated invocation, wall clock vs. the CLI's internal
+  `duration_ms`, and why the first latency figures were wrong — live in
+  `docs/adr/0001-isolate-the-claude-code-invocation.md`, not here. Read it before changing any
+  number in this section.
 
 ### NSServices (Info.plist)
 - `NSMessage` must exactly equal the `@objc` selector name on `NSApp.servicesProvider`:
@@ -90,8 +140,9 @@ Claude Code CLI. Two independent trigger paths: a global hotkey (⌃⌥D) and an
 - If `process.run()` throws, close all three pipe write ends by hand and `group.wait()` before
   returning. No spawn means nothing else will ever close them, and the drain closures would block
   on `read()` forever — a leaked thread and three descriptors per failed launch.
-- The 60s watchdog sends SIGTERM, then SIGKILL after a 5s grace. Without the escalation a wedged
-  child blocks `waitUntilExit` indefinitely and the fix never completes.
+- The watchdog (15s hotkey / 10s Services, see "Invocation") sends SIGTERM, then SIGKILL after a
+  5s grace. Without the escalation a wedged child blocks `waitUntilExit` indefinitely and the fix
+  never completes.
 - The hotkey path stays "busy" until the clipboard has been restored, not merely until Claude
   answers. Releasing the guard earlier lets a second trigger snapshot the correction still sitting
   on the pasteboard, permanently losing the user's original clipboard.
@@ -101,6 +152,11 @@ Claude Code CLI. Two independent trigger paths: a global hotkey (⌃⌥D) and an
 - `./scripts/local-test.sh` — full pre-flight (macOS only).
 - `McGrammar --selftest` — headless: CLI discovery, env hygiene, Info.plist wiring, a real fix.
 - `McGrammar --fix` — stdin → corrected text on stdout.
+- `McGrammar --fixtures` — the live accuracy suite (15 cases, ~40s, costs money, needs a login).
+  Not part of `--selftest` or `swift test` because it isn't free to run on every build, but it is
+  mandatory after touching `ClaudeRunner.prompt`, `ClaudeRunner.systemPrompt`, or any invocation
+  flag — it is what caught the prompt-placement failure recorded in the ADR, and `--selftest`'s
+  one easy sample would not have.
 - The Services path cannot be tested from `swift run`; it requires the .app bundle.
 
 ## Roadmap (post-v1, priority order)
@@ -126,3 +182,17 @@ Claude Code CLI. Two independent trigger paths: a global hotkey (⌃⌥D) and an
   when upgrading.
 - Some Electron and sandboxed apps expose neither Services nor synthetic keystrokes. Having both
   paths is the mitigation; do not remove either.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on the fork `sonhyrd/mc-grammar` (via `gh --repo`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, label strings unchanged. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.

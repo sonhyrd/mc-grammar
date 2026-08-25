@@ -1,6 +1,17 @@
 import Darwin
 import Foundation
 
+/// Everything `fixSync` learned about a successful run, decoded once from `--output-format json`
+/// and carried back through the seam rather than discarded. `model` and `thinkingTokens` in
+/// particular report what the CLI says actually happened, not what was requested — see the
+/// decoding note on `ClaudeJSONResponse`.
+struct FixOutcome {
+    let text: String
+    let model: String
+    let thinkingTokens: Int
+    let durationMs: Int
+}
+
 /// Errors surfaced by the Claude Code bridge. Every case is user-presentable.
 enum FixError: Error, CustomStringConvertible {
     case claudeNotFound
@@ -8,8 +19,24 @@ enum FixError: Error, CustomStringConvertible {
     case timedOut(seconds: Int)
     case launchFailed(String)
     case exited(code: Int32, stderr: String)
+    /// The installed CLI rejected the invocation outright — stderr matched a pattern for an
+    /// unrecognized flag or an unrecognized/deprecated model identifier. Distinct from `.exited`
+    /// so the user gets an action to take instead of a raw CLI error string. Two real causes
+    /// produce this, and the message must stay honest about both: an old CLI that predates
+    /// `--setting-sources`/`--tools`/`--system-prompt`/`--strict-mcp-config`, or a pinned model
+    /// identifier that has since aged out. `claude update` is the fix for the first and, once a
+    /// newer McGrammar ships a fresh pin, effectively the fix for the second too.
+    case rejectedInvocation(String)
     case emptyOutput
     case workspaceUnavailable
+    /// stdout did not contain a parseable `--output-format json` envelope — a CLI version skew,
+    /// or something else writing to stdout ahead of the JSON. Distinct from `.exited` because the
+    /// process itself reported success (exit code 0); it is the payload we could not trust.
+    case malformedResponse(String)
+    /// The JSON parsed cleanly and the process exited 0, but the envelope's own `is_error` field
+    /// says the run did not succeed (e.g. it hit `--max-turns 1` without finishing). Exit code
+    /// alone would have called this a success and pasted `result` over the user's selection.
+    case claudeReportedError(String)
 
     var description: String {
         switch self {
@@ -25,13 +52,74 @@ enum FixError: Error, CustomStringConvertible {
             let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             let clipped = detail.count > 300 ? String(detail.prefix(300)) + "…" : detail
             return clipped.isEmpty ? "claude exited with code \(code)." : "claude exited with code \(code): \(clipped)"
+        case .rejectedInvocation(let stderr):
+            let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let clipped = detail.count > 300 ? String(detail.prefix(300)) + "…" : detail
+            return "Your Claude CLI rejected McGrammar's invocation — try `claude update`."
+                + (clipped.isEmpty ? "" : " (\(clipped))")
         case .emptyOutput:
             return "Claude returned an empty result."
         case .workspaceUnavailable:
             return "Could not create McGrammar's private CLI workspace, so the transcript the CLI "
                 + "writes could not be cleaned up afterwards. Check free space and permissions on "
                 + "~/Library/Application Support."
+        case .malformedResponse(let raw):
+            let clipped = raw.count > 300 ? String(raw.prefix(300)) + "…" : raw
+            return "Claude's response could not be parsed as JSON: \(clipped)"
+        case .claudeReportedError(let message):
+            let clipped = message.count > 300 ? String(message.prefix(300)) + "…" : message
+            return clipped.isEmpty ? "Claude reported an error." : "Claude reported an error: \(clipped)"
         }
+    }
+}
+
+/// Decodes the `--output-format json` envelope. Field casing is exactly what the CLI emits —
+/// mostly snake_case, except `modelUsage` and its contents, which are already camelCase — so this
+/// spells out `CodingKeys` per level instead of a blanket `keyDecodingStrategy`.
+///
+/// `model` is deliberately NOT read from the invocation's `--model` flag: `modelUsage` reports
+/// what the CLI actually billed and ran, which is the whole point of widening this seam. With
+/// `--max-turns 1` there is exactly one entry; if a future CLI version ever reports more, the
+/// first one found is used rather than failing the whole fix over a reporting nuance.
+private struct ClaudeJSONResponse: Decodable {
+    let isError: Bool
+    let result: String
+    let durationMs: Int
+    let usage: Usage
+    let modelUsage: [String: ModelUsageEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case isError = "is_error"
+        case result
+        case durationMs = "duration_ms"
+        case usage
+        case modelUsage
+    }
+
+    struct Usage: Decodable {
+        let outputTokensDetails: OutputTokensDetails?
+
+        enum CodingKeys: String, CodingKey {
+            case outputTokensDetails = "output_tokens_details"
+        }
+
+        struct OutputTokensDetails: Decodable {
+            let thinkingTokens: Int
+
+            enum CodingKeys: String, CodingKey {
+                case thinkingTokens = "thinking_tokens"
+            }
+        }
+    }
+
+    struct ModelUsageEntry: Decodable {
+        let canonicalModel: String
+    }
+
+    /// First entry in `modelUsage`, or `nil` if the CLI reported none — that shape is itself a
+    /// malformed response, not a model to guess at.
+    var canonicalModel: String? {
+        modelUsage.values.first?.canonicalModel
     }
 }
 
@@ -44,17 +132,45 @@ enum FixError: Error, CustomStringConvertible {
 final class ClaudeRunner {
     static let shared = ClaudeRunner()
 
-    static let timeout: TimeInterval = 60
+    /// Default `fixSync` timeout for the hotkey path (and `--fix`/`--selftest`, which behave like
+    /// it). Sized against a measured baseline of ~2.4–2.8s wall clock (see
+    /// docs/adr/0001-isolate-the-claude-code-invocation.md): well past that is a hung child, not a
+    /// slow one. See `servicesTimeout` for the shorter bound used on the main-thread-blocking
+    /// Services path.
+    static let hotkeyTimeout: TimeInterval = 15
+    /// `fixSync` timeout for the NSServices path. Shorter than `hotkeyTimeout` because those
+    /// seconds block the host application's main thread by design — a frozen host app should
+    /// unwedge as fast as possible.
+    static let servicesTimeout: TimeInterval = 10
     /// Grace period between SIGTERM and SIGKILL for a child that refuses to exit.
     static let killGrace: TimeInterval = 5
 
-    /// Tuned and deliberately strict. Loosening this makes Claude rewrite instead of correct.
+    /// Dated identifier, never a floating alias — an alias is what silently put the app on Opus in
+    /// the first place. A stale dated ID becomes a visible maintenance task instead of an invisible
+    /// cost or behaviour change.
+    static let model = "claude-haiku-4-5-20251001"
+
+    /// The single source of truth for the correction rules. Tuned and deliberately strict —
+    /// loosening this makes Claude rewrite instead of correct.
+    ///
+    /// These live in `-p`, NOT in `--system-prompt`, and that placement is load-bearing. Moving
+    /// them into the system prompt and reducing `-p` to a bare pointer reads tidier and measures
+    /// identically on a short input — but on a long, multi-error paragraph it fails roughly half
+    /// the time, usually by returning the user's text completely unchanged and occasionally by
+    /// emitting a list of corrections ("their → they're") that then gets pasted over the
+    /// selection. Measured on the hard fixture: 7/15 correct with the rules in `--system-prompt`,
+    /// 14/14 correct with them here. Do not "tidy" this back.
     static let prompt = """
         Fix the grammar, spelling, and punctuation of the text provided via stdin. \
         Preserve the author's voice, tone, formatting, and line breaks. \
         Do NOT rewrite or rephrase beyond what is needed for correctness. \
         Output ONLY the corrected text. No preamble, no quotes, no explanations, no markdown fences.
         """
+
+    /// Replaces Claude Code's ~3,300-token agent preamble, which is all about git status, tool
+    /// discipline and output styles — none of it applicable here. Deliberately just a role line:
+    /// the rules belong in `prompt`, for the reason documented above.
+    static let systemPrompt = "You are a grammar corrector. Output only corrected text."
 
     /// Written by `resolveBinary()` on a background queue and read from the main thread (menu,
     /// self-test) and from `fixSync` on either. Every access goes through `lock` — an
@@ -184,6 +300,11 @@ final class ClaudeRunner {
         environment.removeValue(forKey: "ANTHROPIC_API_KEY")
         environment.removeValue(forKey: "ANTHROPIC_AUTH_TOKEN")
 
+        // Latency lever, not a credential concern: the model was spending ~90% of its output budget
+        // reasoning about a six-word typo. Undocumented CLI env var, so weaker than a real flag —
+        // a future self-test tripwire on thinkingTokens would catch a CLI change that ignores it.
+        environment["MAX_THINKING_TOKENS"] = "0"
+
         let existing = environment["PATH"] ?? ""
         let prefix = searchDirectories.joined(separator: ":")
         environment["PATH"] = existing.isEmpty ? prefix : "\(prefix):\(existing)"
@@ -197,7 +318,11 @@ final class ClaudeRunner {
     /// CRITICAL INVARIANT: the NSServices handler must call this directly. Never wrap `fixAsync`
     /// in a semaphore from the services handler — that handler runs on the main thread and the
     /// async completion dispatches back to main, which deadlocks with certainty.
-    func fixSync(_ text: String) -> Result<String, FixError> {
+    ///
+    /// - Parameter timeout: how long to wait before the watchdog fires. Defaults to
+    ///   `hotkeyTimeout`; the Services path passes `servicesTimeout` explicitly since it blocks
+    ///   the host application's main thread.
+    func fixSync(_ text: String, timeout: TimeInterval = ClaudeRunner.hotkeyTimeout) -> Result<FixOutcome, FixError> {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.emptyInput) }
 
@@ -215,7 +340,18 @@ final class ClaudeRunner {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = ["-p", Self.prompt, "--max-turns", "1"]
+        // Deliberately blinded, single-purpose invocation — see CLAUDE.md "Invocation". Every flag
+        // here is load-bearing and was measured; do not drop one to "restore" the user's settings.
+        process.arguments = [
+            "-p", Self.prompt,
+            "--max-turns", "1",
+            "--model", Self.model,
+            "--setting-sources", "",
+            "--tools", "",
+            "--strict-mcp-config",
+            "--system-prompt", Self.systemPrompt,
+            "--output-format", "json",
+        ]
         process.environment = childEnvironment()
         process.currentDirectoryURL = workspace
 
@@ -272,8 +408,8 @@ final class ClaudeRunner {
             watch.escalate { if process.isRunning { kill(pid, SIGKILL) } }
         }
         let queue = DispatchQueue.global(qos: .utility)
-        queue.asyncAfter(deadline: .now() + Self.timeout, execute: killer)
-        queue.asyncAfter(deadline: .now() + Self.timeout + Self.killGrace, execute: hardKiller)
+        queue.asyncAfter(deadline: .now() + timeout, execute: killer)
+        queue.asyncAfter(deadline: .now() + timeout + Self.killGrace, execute: hardKiller)
 
         // The selected text goes in over stdin — never interpolated into the argument list, so
         // quotes, backticks and newlines in the user's text cannot be misread as shell syntax.
@@ -296,45 +432,94 @@ final class ClaudeRunner {
         // cost is a rare, honest "took longer than 60s" on a fix that finished within a hair of the
         // deadline; the alternative is silently corrupting the text we were asked to correct.
         if watch.tripped {
-            return .failure(.timedOut(seconds: Int(Self.timeout)))
+            return .failure(.timedOut(seconds: Int(timeout)))
         }
+        // Exit code is authoritative for whether the process itself completed normally — it is
+        // guaranteed by the OS even if stdout is truncated, empty, or not JSON at all, so it is
+        // checked first and short-circuits straight to `.exited` without attempting to parse
+        // anything. `is_error` below is a second, independent signal that only means something
+        // once we already trust the JSON: the CLI can exit 0 (a clean process exit) while its own
+        // envelope reports a logical failure, e.g. hitting `--max-turns 1` without finishing.
         guard process.terminationStatus == 0 else {
             let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+            if Self.looksLikeRejectedInvocation(stderr) {
+                return .failure(.rejectedInvocation(stderr))
+            }
             return .failure(.exited(code: process.terminationStatus, stderr: stderr))
         }
 
         let raw = String(data: stdoutData, encoding: .utf8) ?? ""
-        let cleaned = Self.sanitize(raw)
-        guard !cleaned.isEmpty else { return .failure(.emptyOutput) }
-        return .success(cleaned)
+        guard let response = Self.parseResponse(raw) else {
+            return .failure(.malformedResponse(raw.trimmingCharacters(in: .whitespacesAndNewlines)))
+        }
+        if response.isError {
+            return .failure(.claudeReportedError(response.result))
+        }
+        guard let model = response.canonicalModel else {
+            return .failure(.malformedResponse(raw.trimmingCharacters(in: .whitespacesAndNewlines)))
+        }
+        let text = response.result.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return .failure(.emptyOutput) }
+
+        return .success(FixOutcome(
+            text: text,
+            model: model,
+            thinkingTokens: response.usage.outputTokensDetails?.thinkingTokens ?? 0,
+            durationMs: response.durationMs
+        ))
     }
 
     /// Async wrapper for the hotkey path only: runs the sync core off-main, completes on main.
-    func fixAsync(_ text: String, completion: @escaping (Result<String, FixError>) -> Void) {
+    func fixAsync(
+        _ text: String,
+        timeout: TimeInterval = ClaudeRunner.hotkeyTimeout,
+        completion: @escaping (Result<FixOutcome, FixError>) -> Void
+    ) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = self.fixSync(text)
+            let result = self.fixSync(text, timeout: timeout)
             DispatchQueue.main.async { completion(result) }
         }
     }
 
-    // MARK: - Output hygiene
+    /// Stderr substrings that indicate the CLI rejected the invocation itself, rather than the
+    /// model failing to produce a result. Deliberately no capability probe and no graceful
+    /// degradation here — see the ticket for why both were rejected. This is intentionally a
+    /// pattern match against known CLI error phrasing (commander-style "unknown option", and the
+    /// enum-style rejection an invalid `--model` value produces), not an attempt to parse every
+    /// possible CLI failure; anything that does not match falls through to the generic `.exited`
+    /// case with the raw stderr still visible to the user.
+    private static let rejectedInvocationPatterns = [
+        "unknown option",
+        "unrecognized option",
+        "unrecognized arguments",
+        "unknown arguments",
+        "not a valid choice",
+        "invalid model",
+        "unrecognized model",
+        "unknown model",
+        "model not found",
+        "no such model",
+    ]
 
-    /// Trims and strips the occasional markdown fence. If preamble ever leaks through, switch the
-    /// invocation to `--output-format json` and read the `result` field instead of over-tuning the prompt.
-    static func sanitize(_ raw: String) -> String {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text.hasPrefix("```") else { return text }
+    private static func looksLikeRejectedInvocation(_ stderr: String) -> Bool {
+        let lowered = stderr.lowercased()
+        return rejectedInvocationPatterns.contains { lowered.contains($0) }
+    }
 
-        // Both fences or neither. Stripping on the opening alone silently ate the first line of
-        // any output that merely started with a fence — an unterminated block from the CLI, or a
-        // user correcting a Markdown snippet whose own first line is ```.
-        var lines = text.components(separatedBy: "\n")
-        guard lines.count >= 2,
-              let last = lines.last,
-              last.trimmingCharacters(in: .whitespaces).hasPrefix("```") else { return text }
-        lines.removeFirst()
-        lines.removeLast()
-        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    // MARK: - Response parsing
+
+    /// Decodes the `--output-format json` envelope from raw stdout. Stdout is expected to be
+    /// nothing but that one JSON object, but this is defensive about it not being the only thing
+    /// there: it locates the outermost `{...}` span and decodes that, rather than requiring the
+    /// whole buffer to be valid JSON on the nose. Returns `nil` for anything that does not decode
+    /// — callers turn that into `.malformedResponse`, never a guess at the text.
+    private static func parseResponse(_ raw: String) -> ClaudeJSONResponse? {
+        guard let firstBrace = raw.firstIndex(of: "{"),
+              let lastBrace = raw.lastIndex(of: "}"),
+              firstBrace <= lastBrace else { return nil }
+        let jsonSlice = raw[firstBrace...lastBrace]
+        guard let data = jsonSlice.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(ClaudeJSONResponse.self, from: data)
     }
 }
 

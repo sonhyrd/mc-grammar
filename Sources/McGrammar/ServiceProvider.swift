@@ -23,15 +23,20 @@ final class ServiceProvider: NSObject {
             return
         }
 
-        StatusIcon.shared.setState(.working)
-        let result = ClaudeRunner.shared.fixSync(text)
+        // mainThreadBlocked: true — this handler calls fixSync synchronously on the main thread
+        // right below, so the elapsed-counter timer is allowed to mutate the status button
+        // directly off-main. See the comment on StatusIcon.setState.
+        StatusIcon.shared.setState(.working, mainThreadBlocked: true)
+        // Shorter timeout than the hotkey path: these seconds block the host application's main
+        // thread, so a wedged fix should unfreeze it as fast as possible.
+        let result = ClaudeRunner.shared.fixSync(text, timeout: ClaudeRunner.servicesTimeout)
 
         switch result {
-        case .success(let corrected):
+        case .success(let outcome):
             // declareTypes clears the pasteboard and re-declares in one step; macOS reads the
             // string back out of this same pasteboard to replace the user's selection.
             pasteboard.declareTypes([.string], owner: nil)
-            pasteboard.setString(corrected, forType: .string)
+            pasteboard.setString(outcome.text, forType: .string)
             StatusIcon.shared.setState(.idle)
         case .failure(let failure):
             // Clear the return pasteboard explicitly. NSReturnTypes is declared, so leaving the

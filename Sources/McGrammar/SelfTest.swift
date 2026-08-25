@@ -68,14 +68,28 @@ enum SelfTest {
         let elapsed = Date().timeIntervalSince(started)
 
         switch result {
-        case .success(let corrected):
-            print("✓  Round trip completed in \(String(format: "%.1f", elapsed))s")
-            print("   → \(corrected)")
-            if corrected == sample {
+        case .success(let outcome):
+            print("✓  Round trip completed in \(String(format: "%.1f", elapsed))s (CLI reported \(outcome.durationMs)ms, model \(outcome.model), \(outcome.thinkingTokens) thinking tokens)")
+            print("   → \(outcome.text)")
+            if outcome.text == sample {
                 print("!  Output is identical to the input — check the prompt or the CLI version.")
             }
-            if corrected.lowercased().contains("here is") || corrected.contains("```") {
-                print("!  Output looks like it contains preamble. Consider --output-format json.")
+            if outcome.thinkingTokens == 0 {
+                print("✓  Extended thinking is off (0 thinking tokens).")
+            } else {
+                // A failure, not a warning. MAX_THINKING_TOKENS=0 is an environment variable, not a
+                // documented CLI flag, and it is the single largest latency lever we have — see
+                // docs/adr/0001-isolate-the-claude-code-invocation.md for the measured wall-clock
+                // figures (~2.25s with thinking off, floored by CLI process startup, not inference).
+                // The model was previously spending ~90% of its output budget reasoning about a
+                // six-word typo. A future CLI that silently ignores the variable would reintroduce
+                // that cost and latency with nothing else failing, so this tripwire exists
+                // specifically to catch that regression.
+                print("✗  Extended thinking is ON (\(outcome.thinkingTokens) thinking tokens).")
+                print("   MAX_THINKING_TOKENS=0 is being ignored by the installed CLI. Latency will")
+                print("   have roughly doubled as a result. Check the CLI version and the environment")
+                print("   passed to the child process.")
+                failures += 1
             }
         case .failure(let failure):
             print("✗  Round trip failed: \(failure.description)")
