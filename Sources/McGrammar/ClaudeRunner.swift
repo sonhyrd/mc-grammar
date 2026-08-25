@@ -19,6 +19,14 @@ enum FixError: Error, CustomStringConvertible {
     case timedOut(seconds: Int)
     case launchFailed(String)
     case exited(code: Int32, stderr: String)
+    /// The installed CLI rejected the invocation outright — stderr matched a pattern for an
+    /// unrecognized flag or an unrecognized/deprecated model identifier. Distinct from `.exited`
+    /// so the user gets an action to take instead of a raw CLI error string. Two real causes
+    /// produce this, and the message must stay honest about both: an old CLI that predates
+    /// `--setting-sources`/`--tools`/`--system-prompt`/`--strict-mcp-config`, or a pinned model
+    /// identifier that has since aged out. `claude update` is the fix for the first and, once a
+    /// newer McGrammar ships a fresh pin, effectively the fix for the second too.
+    case rejectedInvocation(String)
     case emptyOutput
     case workspaceUnavailable
     /// stdout did not contain a parseable `--output-format json` envelope — a CLI version skew,
@@ -44,6 +52,11 @@ enum FixError: Error, CustomStringConvertible {
             let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             let clipped = detail.count > 300 ? String(detail.prefix(300)) + "…" : detail
             return clipped.isEmpty ? "claude exited with code \(code)." : "claude exited with code \(code): \(clipped)"
+        case .rejectedInvocation(let stderr):
+            let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let clipped = detail.count > 300 ? String(detail.prefix(300)) + "…" : detail
+            return "Your Claude CLI rejected McGrammar's invocation — try `claude update`."
+                + (clipped.isEmpty ? "" : " (\(clipped))")
         case .emptyOutput:
             return "Claude returned an empty result."
         case .workspaceUnavailable:
@@ -119,7 +132,15 @@ private struct ClaudeJSONResponse: Decodable {
 final class ClaudeRunner {
     static let shared = ClaudeRunner()
 
-    static let timeout: TimeInterval = 60
+    /// Default `fixSync` timeout for the hotkey path (and `--fix`/`--selftest`, which behave like
+    /// it). Sized for a sub-second baseline invocation: anything past this is a hung child, not a
+    /// slow one. See `servicesTimeout` for the shorter bound used on the main-thread-blocking
+    /// Services path.
+    static let hotkeyTimeout: TimeInterval = 15
+    /// `fixSync` timeout for the NSServices path. Shorter than `hotkeyTimeout` because those
+    /// seconds block the host application's main thread by design — a frozen host app should
+    /// unwedge as fast as possible.
+    static let servicesTimeout: TimeInterval = 10
     /// Grace period between SIGTERM and SIGKILL for a child that refuses to exit.
     static let killGrace: TimeInterval = 5
 
@@ -288,7 +309,11 @@ final class ClaudeRunner {
     /// CRITICAL INVARIANT: the NSServices handler must call this directly. Never wrap `fixAsync`
     /// in a semaphore from the services handler — that handler runs on the main thread and the
     /// async completion dispatches back to main, which deadlocks with certainty.
-    func fixSync(_ text: String) -> Result<FixOutcome, FixError> {
+    ///
+    /// - Parameter timeout: how long to wait before the watchdog fires. Defaults to
+    ///   `hotkeyTimeout`; the Services path passes `servicesTimeout` explicitly since it blocks
+    ///   the host application's main thread.
+    func fixSync(_ text: String, timeout: TimeInterval = ClaudeRunner.hotkeyTimeout) -> Result<FixOutcome, FixError> {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.emptyInput) }
 
@@ -374,8 +399,8 @@ final class ClaudeRunner {
             watch.escalate { if process.isRunning { kill(pid, SIGKILL) } }
         }
         let queue = DispatchQueue.global(qos: .utility)
-        queue.asyncAfter(deadline: .now() + Self.timeout, execute: killer)
-        queue.asyncAfter(deadline: .now() + Self.timeout + Self.killGrace, execute: hardKiller)
+        queue.asyncAfter(deadline: .now() + timeout, execute: killer)
+        queue.asyncAfter(deadline: .now() + timeout + Self.killGrace, execute: hardKiller)
 
         // The selected text goes in over stdin — never interpolated into the argument list, so
         // quotes, backticks and newlines in the user's text cannot be misread as shell syntax.
@@ -398,7 +423,7 @@ final class ClaudeRunner {
         // cost is a rare, honest "took longer than 60s" on a fix that finished within a hair of the
         // deadline; the alternative is silently corrupting the text we were asked to correct.
         if watch.tripped {
-            return .failure(.timedOut(seconds: Int(Self.timeout)))
+            return .failure(.timedOut(seconds: Int(timeout)))
         }
         // Exit code is authoritative for whether the process itself completed normally — it is
         // guaranteed by the OS even if stdout is truncated, empty, or not JSON at all, so it is
@@ -408,6 +433,9 @@ final class ClaudeRunner {
         // envelope reports a logical failure, e.g. hitting `--max-turns 1` without finishing.
         guard process.terminationStatus == 0 else {
             let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+            if Self.looksLikeRejectedInvocation(stderr) {
+                return .failure(.rejectedInvocation(stderr))
+            }
             return .failure(.exited(code: process.terminationStatus, stderr: stderr))
         }
 
@@ -433,11 +461,40 @@ final class ClaudeRunner {
     }
 
     /// Async wrapper for the hotkey path only: runs the sync core off-main, completes on main.
-    func fixAsync(_ text: String, completion: @escaping (Result<FixOutcome, FixError>) -> Void) {
+    func fixAsync(
+        _ text: String,
+        timeout: TimeInterval = ClaudeRunner.hotkeyTimeout,
+        completion: @escaping (Result<FixOutcome, FixError>) -> Void
+    ) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = self.fixSync(text)
+            let result = self.fixSync(text, timeout: timeout)
             DispatchQueue.main.async { completion(result) }
         }
+    }
+
+    /// Stderr substrings that indicate the CLI rejected the invocation itself, rather than the
+    /// model failing to produce a result. Deliberately no capability probe and no graceful
+    /// degradation here — see the ticket for why both were rejected. This is intentionally a
+    /// pattern match against known CLI error phrasing (commander-style "unknown option", and the
+    /// enum-style rejection an invalid `--model` value produces), not an attempt to parse every
+    /// possible CLI failure; anything that does not match falls through to the generic `.exited`
+    /// case with the raw stderr still visible to the user.
+    private static let rejectedInvocationPatterns = [
+        "unknown option",
+        "unrecognized option",
+        "unrecognized arguments",
+        "unknown arguments",
+        "not a valid choice",
+        "invalid model",
+        "unrecognized model",
+        "unknown model",
+        "model not found",
+        "no such model",
+    ]
+
+    private static func looksLikeRejectedInvocation(_ stderr: String) -> Bool {
+        let lowered = stderr.lowercased()
+        return rejectedInvocationPatterns.contains { lowered.contains($0) }
     }
 
     // MARK: - Response parsing

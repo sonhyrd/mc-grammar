@@ -24,7 +24,9 @@ final class ServiceProvider: NSObject {
         }
 
         StatusIcon.shared.setState(.working)
-        let result = ClaudeRunner.shared.fixSync(text)
+        // Shorter timeout than the hotkey path: these seconds block the host application's main
+        // thread, so a wedged fix should unfreeze it as fast as possible.
+        let result = ClaudeRunner.shared.fixSync(text, timeout: ClaudeRunner.servicesTimeout)
 
         switch result {
         case .success(let outcome):
