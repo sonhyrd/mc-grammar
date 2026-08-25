@@ -48,13 +48,24 @@ final class ClaudeRunner {
     /// Grace period between SIGTERM and SIGKILL for a child that refuses to exit.
     static let killGrace: TimeInterval = 5
 
-    /// Tuned and deliberately strict. Loosening this makes Claude rewrite instead of correct.
-    static let prompt = """
+    /// Dated identifier, never a floating alias — an alias is what silently put the app on Opus in
+    /// the first place. A stale dated ID becomes a visible maintenance task instead of an invisible
+    /// cost or behaviour change.
+    static let model = "claude-haiku-4-5-20251001"
+
+    /// The single source of truth for the correction rules, carried by `--system-prompt`. Tuned and
+    /// deliberately strict — loosening this makes Claude rewrite instead of correct. Do not
+    /// duplicate any of this text into `promptPointer`; that string exists only to select print mode.
+    static let systemPrompt = """
         Fix the grammar, spelling, and punctuation of the text provided via stdin. \
         Preserve the author's voice, tone, formatting, and line breaks. \
         Do NOT rewrite or rephrase beyond what is needed for correctness. \
         Output ONLY the corrected text. No preamble, no quotes, no explanations, no markdown fences.
         """
+
+    /// `-p` cannot be empty — it is what selects print mode — but it must not duplicate
+    /// `systemPrompt`. Kept as a bare pointer so the rules live in exactly one constant.
+    static let promptPointer = "Correct the text on stdin."
 
     /// Written by `resolveBinary()` on a background queue and read from the main thread (menu,
     /// self-test) and from `fixSync` on either. Every access goes through `lock` — an
@@ -184,6 +195,11 @@ final class ClaudeRunner {
         environment.removeValue(forKey: "ANTHROPIC_API_KEY")
         environment.removeValue(forKey: "ANTHROPIC_AUTH_TOKEN")
 
+        // Latency lever, not a credential concern: the model was spending ~90% of its output budget
+        // reasoning about a six-word typo. Undocumented CLI env var, so weaker than a real flag —
+        // a future self-test tripwire on thinkingTokens would catch a CLI change that ignores it.
+        environment["MAX_THINKING_TOKENS"] = "0"
+
         let existing = environment["PATH"] ?? ""
         let prefix = searchDirectories.joined(separator: ":")
         environment["PATH"] = existing.isEmpty ? prefix : "\(prefix):\(existing)"
@@ -215,7 +231,17 @@ final class ClaudeRunner {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = ["-p", Self.prompt, "--max-turns", "1"]
+        // Deliberately blinded, single-purpose invocation — see CLAUDE.md "Invocation". Every flag
+        // here is load-bearing and was measured; do not drop one to "restore" the user's settings.
+        process.arguments = [
+            "-p", Self.promptPointer,
+            "--max-turns", "1",
+            "--model", Self.model,
+            "--setting-sources", "",
+            "--tools", "",
+            "--strict-mcp-config",
+            "--system-prompt", Self.systemPrompt,
+        ]
         process.environment = childEnvironment()
         process.currentDirectoryURL = workspace
 
