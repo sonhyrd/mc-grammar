@@ -149,19 +149,27 @@ final class ClaudeRunner {
     /// cost or behaviour change.
     static let model = "claude-haiku-4-5-20251001"
 
-    /// The single source of truth for the correction rules, carried by `--system-prompt`. Tuned and
-    /// deliberately strict — loosening this makes Claude rewrite instead of correct. Do not
-    /// duplicate any of this text into `promptPointer`; that string exists only to select print mode.
-    static let systemPrompt = """
+    /// The single source of truth for the correction rules. Tuned and deliberately strict —
+    /// loosening this makes Claude rewrite instead of correct.
+    ///
+    /// These live in `-p`, NOT in `--system-prompt`, and that placement is load-bearing. Moving
+    /// them into the system prompt and reducing `-p` to a bare pointer reads tidier and measures
+    /// identically on a short input — but on a long, multi-error paragraph it fails roughly half
+    /// the time, usually by returning the user's text completely unchanged and occasionally by
+    /// emitting a list of corrections ("their → they're") that then gets pasted over the
+    /// selection. Measured on the hard fixture: 7/15 correct with the rules in `--system-prompt`,
+    /// 14/14 correct with them here. Do not "tidy" this back.
+    static let prompt = """
         Fix the grammar, spelling, and punctuation of the text provided via stdin. \
         Preserve the author's voice, tone, formatting, and line breaks. \
         Do NOT rewrite or rephrase beyond what is needed for correctness. \
         Output ONLY the corrected text. No preamble, no quotes, no explanations, no markdown fences.
         """
 
-    /// `-p` cannot be empty — it is what selects print mode — but it must not duplicate
-    /// `systemPrompt`. Kept as a bare pointer so the rules live in exactly one constant.
-    static let promptPointer = "Correct the text on stdin."
+    /// Replaces Claude Code's ~3,300-token agent preamble, which is all about git status, tool
+    /// discipline and output styles — none of it applicable here. Deliberately just a role line:
+    /// the rules belong in `prompt`, for the reason documented above.
+    static let systemPrompt = "You are a grammar corrector. Output only corrected text."
 
     /// Written by `resolveBinary()` on a background queue and read from the main thread (menu,
     /// self-test) and from `fixSync` on either. Every access goes through `lock` — an
@@ -334,7 +342,7 @@ final class ClaudeRunner {
         // Deliberately blinded, single-purpose invocation — see CLAUDE.md "Invocation". Every flag
         // here is load-bearing and was measured; do not drop one to "restore" the user's settings.
         process.arguments = [
-            "-p", Self.promptPointer,
+            "-p", Self.prompt,
             "--max-turns", "1",
             "--model", Self.model,
             "--setting-sources", "",
