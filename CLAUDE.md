@@ -126,3 +126,17 @@ Claude Code CLI. Two independent trigger paths: a global hotkey (⌃⌥D) and an
   when upgrading.
 - Some Electron and sandboxed apps expose neither Services nor synthetic keystrokes. Having both
   paths is the mitigation; do not remove either.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on the fork `sonhyrd/mc-grammar` (via `gh --repo`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, label strings unchanged. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
