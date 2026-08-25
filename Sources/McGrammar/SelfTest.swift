@@ -74,8 +74,19 @@ enum SelfTest {
             if outcome.text == sample {
                 print("!  Output is identical to the input — check the prompt or the CLI version.")
             }
-            if outcome.text.lowercased().contains("here is") || outcome.text.contains("```") {
-                print("!  Output looks like it contains preamble.")
+            if outcome.thinkingTokens == 0 {
+                print("✓  Extended thinking is off (0 thinking tokens).")
+            } else {
+                // A failure, not a warning. MAX_THINKING_TOKENS=0 is an environment variable, not a
+                // documented CLI flag, and it is the single largest latency lever we have: with it,
+                // a fix takes ~0.84s; without it, ~2.3s. A future CLI that silently ignores the
+                // variable would double latency and cost with nothing else failing, so this tripwire
+                // exists specifically to catch that regression.
+                print("✗  Extended thinking is ON (\(outcome.thinkingTokens) thinking tokens).")
+                print("   MAX_THINKING_TOKENS=0 is being ignored by the installed CLI. Latency will")
+                print("   have roughly doubled as a result. Check the CLI version and the environment")
+                print("   passed to the child process.")
+                failures += 1
             }
         case .failure(let failure):
             print("✗  Round trip failed: \(failure.description)")
