@@ -12,10 +12,10 @@ final class HotKey {
     /// active instance is parked in a file-private global.
     fileprivate static var active: HotKey?
 
-    /// Registers ⌃⌥G by default. Returns false if another app already owns the combination.
+    /// Registers ⌃⌥D by default. Returns false if another app already owns the combination.
     @discardableResult
     func register(
-        keyCode: UInt32 = UInt32(kVK_ANSI_G),
+        keyCode: UInt32 = UInt32(kVK_ANSI_D),
         modifiers: UInt32 = UInt32(controlKey | optionKey),
         handler: @escaping () -> Void
     ) -> Bool {

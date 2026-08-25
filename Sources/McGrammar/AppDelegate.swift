@@ -60,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let fixItem = NSMenuItem(
             title: "Fix Selected Text",
             action: #selector(fixSelectionMenuAction),
-            keyEquivalent: "g"
+            keyEquivalent: "d"
         )
         fixItem.keyEquivalentModifierMask = [.control, .option]
         fixItem.target = self
@@ -119,8 +119,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let granted = TextCapture.hasAccessibilityPermission
         if granted {
             accessibilityItem?.title = hotKeyRegistered
-                ? "Accessibility: granted (hotkey ⌃⌥G active)"
-                : "Accessibility: granted — hotkey ⌃⌥G is taken by another app"
+                ? "Accessibility: granted (hotkey ⌃⌥D active)"
+                : "Accessibility: granted — hotkey ⌃⌥D is taken by another app"
         } else {
             accessibilityItem?.title = "Accessibility: not granted — click to fix hotkey"
         }
@@ -202,7 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 TextCapture.paste(corrected)
                 StatusIcon.shared.setState(.idle)
                 // Stay busy until the clipboard is back to how the user left it. Releasing the
-                // guard at completion instead would let a second ⌃⌥G snapshot the correction that
+                // guard at completion instead would let a second ⌃⌥D snapshot the correction that
                 // is still sitting on the pasteboard, and the original would be lost for good.
                 DispatchQueue.main.asyncAfter(deadline: .now() + TextCapture.clipboardRestoreDelay) {
                     TextCapture.restore(snapshot)

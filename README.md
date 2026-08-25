@@ -3,7 +3,7 @@
 A macOS menu bar utility that fixes grammar, spelling, and punctuation in **any** app — powered by
 the Claude Code CLI you already have installed and logged into.
 
-Highlight text anywhere, hit ⌃⌥G (or right-click → Services), and the selection is replaced in
+Highlight text anywhere, hit ⌃⌥D (or right-click → Services), and the selection is replaced in
 place with a corrected version.
 
 **No API key. Ever.** McGrammar shells out to the official `claude` binary that you installed and
@@ -50,11 +50,11 @@ login shell's PATH) before you go looking for bugs in the app.
 
 **3. Allow Accessibility when asked.** On first launch macOS shows
 "McGrammar would like to control this computer using accessibility features". Click **Open System
-Settings** and enable McGrammar. This is only needed for the ⌃⌥G hotkey — see below. Declining is
+Settings** and enable McGrammar. This is only needed for the ⌃⌥D hotkey — see below. Declining is
 fine; the Services menu path works without it.
 
 **4. Try it.** Open TextEdit or Notes, type `this are a sentense with mistake`, select it, and
-press ⌃⌥G. A few seconds later it is replaced.
+press ⌃⌥D. A few seconds later it is replaced.
 
 The menu bar shows `✒︎` when idle, `⋯` while Claude is working, `✒︎!` briefly on an error. Click it
 for the resolved `claude` path, the Accessibility state, and Quit.
@@ -86,7 +86,7 @@ the empty folder itself stays behind.
 
 | | Hotkey | Services menu |
 |---|---|---|
-| Trigger | ⌃⌥G | select → right-click → Services → **Fix Grammar with McGrammar** |
+| Trigger | ⌃⌥D | select → right-click → Services → **Fix Grammar with McGrammar** |
 | Permission | Accessibility required | none |
 | Behaviour | copies the selection, pastes the fix back, restores your clipboard | macOS replaces the selection natively |
 | Caveat | some apps block synthetic keystrokes | the calling app freezes while Claude thinks |
@@ -104,7 +104,7 @@ not for read-only text such as an article body or a PDF.
 
 **Chrome, and Electron apps generally, do not show Services in their right-click menu.** Those
 menus are drawn by the app itself rather than by macOS, and they simply leave Services out. It is
-not a McGrammar bug and nothing in the app can change it. In Chrome, use ⌃⌥G, or reach the same
+not a McGrammar bug and nothing in the app can change it. In Chrome, use ⌃⌥D, or reach the same
 service from the menu bar via **Chrome → Services**. This is exactly why both paths exist.
 
 ### Granting Accessibility (hotkey only)
@@ -167,7 +167,7 @@ echo "this are a sentense with mistake" | \
 ### Manual smoke test
 
 1. Open Notes, type `this are a sentense with mistake`, select it.
-2. Press ⌃⌥G. After a few seconds the text is replaced.
+2. Press ⌃⌥D. After a few seconds the text is replaced.
 3. Undo (⌘Z), reselect, and try right-click → Services → Fix Grammar with McGrammar.
 4. Paste (⌘V) somewhere: your original clipboard should still be there.
 
@@ -216,9 +216,9 @@ Verify it yourself — both of these should report zero leftovers:
 | Symptom | Fix |
 |---|---|
 | Menu says "Claude CLI: not found" | `claude login` in a terminal, then **Re-detect Claude CLI** in the menu |
-| Hotkey does nothing | Accessibility not granted to *McGrammar.app*, or another app owns ⌃⌥G (the menu tells you which) |
+| Hotkey does nothing | Accessibility not granted to *McGrammar.app*, or another app owns ⌃⌥D (the menu tells you which) |
 | Services item missing | see the Services section above |
-| No Services item in Chrome / Slack / VS Code | expected — those draw their own menus. Use ⌃⌥G, or the app's own **menu bar → Services** |
+| No Services item in Chrome / Slack / VS Code | expected — those draw their own menus. Use ⌃⌥D, or the app's own **menu bar → Services** |
 | Item missing on read-only text | expected — it only appears where the selection is editable |
 | Accessibility keeps prompting although the box is ticked | the listed entry is stale. `tccutil reset Accessibility com.zernonia.mcgrammar`, then relaunch and allow once |
 | "claude exited with code…" | run the same fix with `--fix` from a terminal to see the CLI's own error |

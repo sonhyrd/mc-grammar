@@ -50,7 +50,7 @@ cat <<NOTE
 
 $APP_NAME is running in the menu bar (look for the ✒︎ glyph).
 
-  Hotkey path      ⌃⌥G — needs Accessibility permission for McGrammar.app
+  Hotkey path      ⌃⌥D — needs Accessibility permission for McGrammar.app
                    System Settings → Privacy & Security → Accessibility
   Services path    select text → right-click → Services → "Fix Grammar with McGrammar"
                    no permission needed; enable it under

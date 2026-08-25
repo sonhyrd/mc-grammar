@@ -6,7 +6,7 @@ Context and hard invariants for Claude Code sessions in this repository.
 
 A macOS menu bar utility (Swift + AppKit, SPM, **zero third-party dependencies**) that corrects the
 user's selected text in any app by shelling out to their locally installed, locally authenticated
-Claude Code CLI. Two independent trigger paths: a global hotkey (⌃⌥G) and an NSServices menu item.
+Claude Code CLI. Two independent trigger paths: a global hotkey (⌃⌥D) and an NSServices menu item.
 
 ## Invariants — do not violate these
 

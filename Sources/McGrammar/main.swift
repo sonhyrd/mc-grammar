@@ -11,7 +11,7 @@ if arguments.contains("--help") || arguments.contains("-h") {
         McGrammar — fix grammar in any macOS app using your local Claude Code CLI.
 
         Usage:
-          McGrammar              Launch the menu bar app (⌃⌥G, plus the Services menu item)
+          McGrammar              Launch the menu bar app (⌃⌥D, plus the Services menu item)
           McGrammar --selftest   Run headless checks: CLI discovery, permissions, a real fix
           McGrammar --fix        Read text from stdin, print the corrected text
           McGrammar --help       Show this message

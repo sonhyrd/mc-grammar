@@ -58,7 +58,7 @@ McGrammar/
 
 | | Path A: Global hotkey | Path B: Right-click context menu |
 |---|---|---|
-| Trigger | ⌃⌥G (Carbon `RegisterEventHotKey`) | Selection → right-click → Services → "Fix Grammar with McGrammar" |
+| Trigger | ⌃⌥D (Carbon `RegisterEventHotKey`) | Selection → right-click → Services → "Fix Grammar with McGrammar" |
 | Capture | Simulate ⌘C via `CGEvent`, read `NSPasteboard` after ~250ms | macOS hands text on a pasteboard (`NSServices` with `NSSendTypes`) |
 | Replace | Write result to pasteboard, simulate ⌘V, restore original clipboard ~600ms later | Write result back to the same pasteboard before the handler returns — macOS replaces the selection **natively** because `NSReturnTypes` is declared |
 | Permissions | **Requires Accessibility** (System Settings → Privacy & Security). Permission attaches to the *launching* process (Terminal vs the .app) — document this | **No Accessibility needed** — the cleaner path |
@@ -93,7 +93,7 @@ McGrammar/
 ## 4. UX Details
 
 - Menu bar icon states: idle `✒︎`, working `⋯`, error `✒︎!` (revert after ~3s).
-- Menu contents: "Fix Selected Text (⌃⌥G)", resolved claude path / not-found warning, Quit.
+- Menu contents: "Fix Selected Text (⌃⌥D)", resolved claude path / not-found warning, Quit.
 - Notifications for: no selection, claude not found, fix failed (include first ~300 chars of stderr).
 - Empty/whitespace-only selection → friendly notification, restore clipboard, bail.
 - Never log or persist user text anywhere. State it in the README as a privacy guarantee.
