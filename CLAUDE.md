@@ -82,8 +82,15 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 - `NSTimeout` in Info.plist stays **120000ms** regardless of the above — it bounds how long macOS
   waits for the whole Services round trip including its own dispatch overhead, not just the child
   process, and the default is far too short for Claude Code spin-up.
-- `sanitize()` was deleted: nothing in this invocation reaches a shell, so there was nothing to
-  sanitize against — stdin plus `Process.arguments` never touch a shell interpreter.
+- `sanitize()` was deleted because `--output-format json` removed the ambiguity it existed to
+  resolve, **not** for any shell-safety reason. It was output hygiene — it stripped Markdown fences
+  and preamble from the model's raw stdout — and never had anything to do with shell injection.
+  With the JSON envelope, `result` is a typed string field, so a fence inside it is unambiguously
+  content rather than framing, and there is nothing left to disambiguate. Do not restore
+  fence-stripping: a selection that legitimately *is* a fenced code block, correctly returned
+  unchanged, would have its fences eaten and be pasted back malformed. If the model ever starts
+  emitting a fence the input did not have, that is a prompt regression and `--fixtures` is where it
+  gets caught.
 - Drain stdout and stderr concurrently; a blocked pipe buffer wedges the child.
 - Real, measured numbers — old vs. isolated invocation, wall clock vs. the CLI's internal
   `duration_ms`, and why the first latency figures were wrong — live in
