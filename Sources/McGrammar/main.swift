@@ -14,6 +14,8 @@ if arguments.contains("--help") || arguments.contains("-h") {
           McGrammar              Launch the menu bar app (⌃⌥D, plus the Services menu item)
           McGrammar --selftest   Run headless checks: CLI discovery, permissions, a real fix
           McGrammar --fix        Read text from stdin, print the corrected text
+          McGrammar --fixtures   Run the live accuracy suite against the pinned model (costs
+                                  money, needs a login; not part of --selftest or swift test)
           McGrammar --help       Show this message
         """)
     exit(0)
@@ -25,6 +27,10 @@ if arguments.contains("--selftest") {
 
 if arguments.contains("--fix") {
     exit(CommandLineFix.run())
+}
+
+if arguments.contains("--fixtures") {
+    exit(Fixtures.run())
 }
 
 let application = NSApplication.shared
