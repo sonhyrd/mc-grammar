@@ -14,8 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var claudeStatusItem: NSMenuItem?
     private var accessibilityItem: NSMenuItem?
-    private var standardHotKeyRegistration: HotKeyRegistration = .registrationFailed(noErr)
-    private var alternateHotKeyRegistration: HotKeyRegistration = .registrationFailed(noErr)
+    private var standardHotKeyRegistration: HotKeyRegistration = .notAttempted
+    private var alternateHotKeyRegistration: HotKeyRegistration = .notAttempted
     private var isBusy = false
 
     /// Bumped whenever the default preset changes, so a future change can notify again instead of
@@ -26,6 +26,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// two call sites reading it under different spellings is exactly how the upgrade notice came
     /// to be gated on a key nothing wrote.
     private static let accessibilityPromptKey = "promptedForAccessibilityByBuild"
+
+    /// Named for the same reason as `accessibilityPromptKey`: a defaults key spelled out at its
+    /// read site is a key the next edit can misspell in silence.
+    private static let defaultPresetNoticeKey = "defaultPresetNoticeGeneration"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // The one place the policy is set. LSUIElement in Info.plist covers the bundled app; this
@@ -61,7 +65,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // through and would otherwise make every fresh install look like an upgrade.
         let hasRunPreviously = UserDefaults.standard.string(forKey: Self.accessibilityPromptKey) != nil
         promptForAccessibilityOnFirstLaunch()
-        announceDefaultPresetChangeIfNeeded(hasRunPreviously: hasRunPreviously)
+        // One main-queue hop later, not inline. promptForAccessibilityOnFirstLaunch can put the
+        // system TCC dialog on screen, and an upgrading user without the grant would otherwise
+        // get our modal stacked on top of it at launch of an app with no Dock icon to explain
+        // where either came from.
+        DispatchQueue.main.async { [weak self] in
+            self?.announceDefaultPresetChangeIfNeeded(hasRunPreviously: hasRunPreviously)
+        }
     }
 
     /// macOS shows the "McGrammar would like to control this computer" dialog at most once per
@@ -106,12 +116,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// someone relies on has moved without saying where it went converts a surprise into a
     /// complaint.
     private func announceDefaultPresetChangeIfNeeded(hasRunPreviously: Bool) {
-        let key = "defaultPresetNoticeGeneration"
         let defaults = UserDefaults.standard
+        let key = Self.defaultPresetNoticeKey
         guard defaults.integer(forKey: key) < Self.defaultPresetNoticeGeneration else { return }
-        defaults.set(Self.defaultPresetNoticeGeneration, forKey: key)
 
-        guard hasRunPreviously else { return }
+        // Recorded here for a fresh install, which has no old behaviour to be surprised by and so
+        // must not be told about this change later. For an upgrading user it is recorded only
+        // after the alert has actually been on screen: spending the generation before `runModal`
+        // returns would leave anyone whose alert did not display permanently un-notified about a
+        // default that now rewrites their wording.
+        guard hasRunPreviously else {
+            defaults.set(Self.defaultPresetNoticeGeneration, forKey: key)
+            return
+        }
 
         let alert = NSAlert()
         alert.messageText = "⌃⌥D now runs \(Preset.standard.displayName)"
@@ -127,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.addButton(withTitle: "OK")
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
+        defaults.set(Self.defaultPresetNoticeGeneration, forKey: key)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

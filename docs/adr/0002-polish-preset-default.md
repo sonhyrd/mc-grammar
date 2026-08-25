@@ -44,7 +44,7 @@ text. "Make this sound natural" gives the model no way to distinguish an improve
 for from one it was not, and that is the instruction that produces over-rewriting. It likewise
 enumerates what is held fixed: register, voice, claim strength, and length to within about a tenth.
 
-**`factualIntegrity` is stated first, ahead of every other instruction, with its reason attached.**
+**`factualIntegrity` is stated ahead of every other instruction, with its reason attached.**
 It is first because it is the one guarantee the user cannot check for themselves. A grammar
 correction is verifiable at a glance; a fluency rewrite is not, because the whole point is that it
 reads better than what they wrote. A fact quietly altered here survives into whatever they send

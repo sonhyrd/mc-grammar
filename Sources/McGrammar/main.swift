@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import Darwin
 
 // A child that exits before reading stdin would otherwise take the whole app down with SIGPIPE.
@@ -29,7 +30,15 @@ if arguments.contains("--selftest") {
 }
 
 if arguments.contains("--fix") {
-    exit(CommandLineFix.run(preset: Preset.fromArguments(arguments, default: .standard)))
+    switch Preset.fromArguments(arguments, default: .standard) {
+    case .selected(let preset):
+        exit(CommandLineFix.run(preset: preset))
+    case let selection:
+        // Refused rather than defaulted: --fix overwrites whatever it is given, so guessing which
+        // preset was meant would rewrite the user's text under one they did not ask for.
+        FileHandle.standardError.write(Data("McGrammar: \(selection.errorDescription ?? "")\n".utf8))
+        exit(2)
+    }
 }
 
 if arguments.contains("--fixtures") {

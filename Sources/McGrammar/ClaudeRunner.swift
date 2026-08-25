@@ -150,10 +150,9 @@ final class ClaudeRunner {
     /// cost or behaviour change.
     static let model = "claude-haiku-4-5-20251001"
 
-    /// The prompts moved to `Preset`. Their placement did not: the rules stay in `-p` and
-    /// `--system-prompt` stays a one-line role, for the measured reason recorded on `Preset.prompt`
-    /// and in docs/adr/0001-isolate-the-claude-code-invocation.md.
-
+    // The prompts moved to `Preset`. Their placement did not: the rules stay in `-p` and
+    // `--system-prompt` stays a one-line role, for the measured reason recorded on `Preset.prompt`
+    // and in docs/adr/0001-isolate-the-claude-code-invocation.md.
 
     /// Written by `resolveBinary()` on a background queue and read from the main thread (menu,
     /// self-test) and from `fixSync` on either. Every access goes through `lock` — an

@@ -38,7 +38,7 @@ enum SelfTest {
             // Every NSMessage must name a selector that actually exists on the provider. A typo
             // here is silent: macOS registers the menu item and the click does nothing.
             let declared = services.compactMap { $0["NSMessage"] as? String }
-            let expected = ["fixGrammar", "polishText"]
+            let expected = Preset.allCases.map(\.serviceMessage)
             if Set(declared) == Set(expected) {
                 print("✓  Info.plist declares both services: \(declared.joined(separator: ", "))")
             } else {
@@ -49,6 +49,17 @@ enum SelfTest {
                 print("✗  Info.plist NSMessage=\(message) has no matching @objc selector on ServiceProvider")
                 failures += 1
             }
+            // The first Services entry is the one the user's eye lands on and the one the
+            // README calls primary, but nothing derives its order from `Preset.standard` — the
+            // plist hardcodes it. Flipping the default back in code would otherwise leave the
+            // menu still leading with the old default, silently.
+            if declared.first == Preset.standard.serviceMessage {
+                print("✓  First Services entry is the default preset (\(Preset.standard.displayName))")
+            } else {
+                print("✗  First Services entry is \(declared.first ?? "none") — expected \(Preset.standard.serviceMessage), the default preset (\(Preset.standard.displayName))")
+                failures += 1
+            }
+
             // NSReturnTypes is what makes a service replace the selection instead of merely
             // receiving it. Missing on any one entry and that entry silently stops working.
             let missingReturnTypes = services.filter { ($0["NSReturnTypes"] as? [String])?.isEmpty ?? true }

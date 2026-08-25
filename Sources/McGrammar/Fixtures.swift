@@ -12,6 +12,10 @@ struct Fixture {
     let input: String
     let required: [String]
     let forbidden: [String]
+    /// Substrings that must appear an exact number of times. `required` cannot express this: a
+    /// closing "```" is a substring of the opening "```js", so presence alone is satisfied by an
+    /// unbalanced fence and the case cannot fail for the thing it exists to detect.
+    var requiredCounts: [String: Int] = [:]
     /// Which preset this case exercises. Defaulted so the original correction cases read exactly
     /// as they did before presets existed.
     var preset: Preset = .proofread
@@ -220,8 +224,12 @@ enum Fixtures {
             // The fence and its contents must survive byte-for-byte. sanitize() was deleted partly
             // so that a selection which legitimately is fenced comes back intact; this is the case
             // that proves the model does not undo that on its own.
-            required: ["```js", "if (x == null) { return err; }", "```"],
+            required: ["```js", "if (x == null) { return err; }"],
             forbidden: ["below mentioned", "is having a issue"],
+            // Counted, not merely present: "```" occurs inside "```js", so a required substring
+            // would pass on an output that opened the fence and never closed it. Exactly two is
+            // the property — one opening, one closing, and no fence the input did not have.
+            requiredCounts: ["```": 2],
             preset: .polish
         ),
     ]
@@ -257,6 +265,13 @@ enum Fixtures {
                 for needle in fixture.forbidden where text.contains(needle) {
                     caseFailed = true
                     print("  ✗ found forbidden substring: \"\(needle)\"")
+                }
+                for (needle, expected) in fixture.requiredCounts {
+                    let actual = text.components(separatedBy: needle).count - 1
+                    if actual != expected {
+                        caseFailed = true
+                        print("  ✗ expected \(expected)x \"\(needle)\", found \(actual)")
+                    }
                 }
 
                 let elapsed = Date().timeIntervalSince(caseStarted)

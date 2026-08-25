@@ -35,16 +35,68 @@ enum Preset: String, CaseIterable {
         standard == .proofread ? .polish : .proofread
     }
 
-    /// Picks a preset off the command line for `--fix`. Unknown or absent means the default.
+    /// The `NSMessage` string the Services entry for this preset declares, and the `@objc`
+    /// selector name on `ServiceProvider` it must equal. `fixGrammar` predates the split and
+    /// means Proofread; renaming it would unregister the service, which is why it keeps a
+    /// spelling the preset no longer has.
+    ///
+    /// It lives here so `Info.plist`, `ServiceProvider` and `--selftest` name the same set from
+    /// one place instead of three, and so `--selftest` can check that the *first* Services entry
+    /// is the one `standard` points at.
+    var serviceMessage: String {
+        switch self {
+        case .proofread: return "fixGrammar"
+        case .polish: return "polishText"
+        }
+    }
+
+    /// What the command line asked for. Absent means the caller's default; anything the caller
+    /// cannot act on faithfully is an error rather than a preset.
+    ///
+    /// Silence is not available here. `--fix` irreversibly overwrites whatever it is given, so a
+    /// mistyped `--polsh` resolving to the default, or `--polish --proofread` resolving by enum
+    /// declaration order, would rewrite the user's text under a preset they did not ask for and
+    /// say nothing about it.
+    enum Selection {
+        case selected(Preset)
+        /// More than one preset flag was passed. Carries them in the order given.
+        case ambiguous([Preset])
+        /// A flag `--fix` does not recognise — most usefully, a misspelled preset name.
+        case unrecognized(String)
+
+        /// The message `--fix` prints before exiting non-zero. `nil` when a preset was selected.
+        var errorDescription: String? {
+            switch self {
+            case .selected: return nil
+            case .ambiguous(let presets):
+                let flags = presets.map { "--\($0.rawValue)" }.joined(separator: " and ")
+                return "\(flags) select different presets — pass one."
+            case .unrecognized(let argument):
+                return "unrecognised option \(argument). --fix takes --polish or --proofread."
+            }
+        }
+    }
+
+    /// Flags `--fix` accepts alongside a preset. An argument outside this set is rejected rather
+    /// than ignored, which is what turns a typo into a message instead of a silent default.
+    private static let fixArguments: Set<String> = ["--fix"]
+
+    /// Picks a preset off the command line for `--fix`. Absent means the default.
     ///
     /// The default is deliberately named at each call site rather than defaulted here, so that
     /// changing which preset is default is one visible edit rather than a silent change of
     /// meaning in a helper.
-    static func fromArguments(_ arguments: [String], default fallback: Preset) -> Preset {
-        for preset in Preset.allCases where arguments.contains("--\(preset.rawValue)") {
-            return preset
+    static func fromArguments(_ arguments: [String], default fallback: Preset) -> Selection {
+        let known = fixArguments.union(Preset.allCases.map { "--\($0.rawValue)" })
+        if let unknown = arguments.first(where: { $0.hasPrefix("--") && !known.contains($0) }) {
+            return .unrecognized(unknown)
         }
-        return fallback
+        let selected = Preset.allCases.filter { arguments.contains("--\($0.rawValue)") }
+        switch selected.count {
+        case 0: return .selected(fallback)
+        case 1: return .selected(selected[0])
+        default: return .ambiguous(selected)
+        }
     }
 
     /// Name for the menu, the toast and `--selftest` output.

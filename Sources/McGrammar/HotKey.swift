@@ -9,6 +9,10 @@ import Carbon.HIToolbox
 /// it; "the event handler would not install" is ours. The menu has to be able to say which.
 enum HotKeyRegistration {
     case registered
+    /// No attempt has been made yet. The initial value, so the menu cannot report a failure that
+    /// never happened — `.registrationFailed(noErr)` rendered as "registration failed (OSStatus
+    /// 0)", which is a contradiction kept unreachable only by call ordering.
+    case notAttempted
     /// `InstallEventHandler` failed, so no combination was ever attempted.
     case handlerInstallFailed(OSStatus)
     /// The combination is already owned by another process — the common, actionable case.
@@ -31,6 +35,8 @@ enum HotKeyRegistration {
             return "could not install the key handler (OSStatus \(status))"
         case .combinationTaken(let status):
             return "already taken by another app (OSStatus \(status))"
+        case .notAttempted:
+            return "not attempted yet"
         case .registrationFailed(let status):
             return "registration failed (OSStatus \(status))"
         }

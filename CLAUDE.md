@@ -109,7 +109,9 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 - Every preset must be reachable from **both** trigger paths. The alternate preset is what a user
   reaches for when the default did something they did not want, so it must never be the one that is
   unreachable in an app that exposes only one path.
-- `factualIntegrity` is stated first in Polish's prompt, with its reason, and is proved by the
+- `factualIntegrity` is stated ahead of every other instruction in Polish's prompt — after the
+  one framing sentence, and claiming that primacy in its own words ("Before anything else, and
+  above every other instruction here") — with its reason, and is proved by the
   `polish-factual-integrity` fixture. The clause, the fixture and `CONTEXT.md` share the name on
   purpose. Weakening the fixture silently unbacks the guarantee the README makes.
 - **The success toast is not decoration.** Under Polish the user cannot see what changed — that is
@@ -127,6 +129,12 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
   these strings at build time and a typo registers a menu item that silently does nothing.
 - Service selectors bind to a **preset**, not to whichever preset is default, so flipping the
   default cannot change what an entry does. `fixGrammar` predates the split and means Proofread.
+  The `NSMessage` strings live on `Preset.serviceMessage` so the plist, `ServiceProvider` and
+  `--selftest` name one set rather than three.
+- **The plist's entry order is not derived from `Preset.standard`** — it is hardcoded, so flipping
+  the default in code would otherwise leave the Services menu still leading with the old one.
+  `--selftest` asserts that the first entry's `NSMessage` equals `Preset.standard.serviceMessage`;
+  a flip means editing the plist order and titles too.
 - **No `NSKeyEquivalent`.** It used to declare ⌘⌃⇧G, which the app never registered. The Carbon
   hotkeys are the single keyboard mechanism; adding one back binds the same gesture twice on an
   action that irreversibly overwrites the selection.
@@ -187,7 +195,9 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 ## Testing
 
 - `./scripts/local-test.sh` — full pre-flight (macOS only).
-- `McGrammar --selftest` — headless: CLI discovery, env hygiene, Info.plist wiring, a real fix.
+- `McGrammar --selftest` — headless: CLI discovery, env hygiene, Info.plist wiring, and one real
+  fix **per preset** — two CLI calls, so it costs and takes roughly twice what it did before the
+  presets split.
 - `McGrammar --fix` — stdin → corrected text on stdout, byte-faithful (it writes rather than
   prints, so the text's own trailing whitespace is not doubled). Takes `--polish` / `--proofread`.
 - `McGrammar --fixtures` — the live accuracy suite (21 cases, ~60s, costs money, needs a login).

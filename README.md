@@ -14,8 +14,8 @@ place. Two presets:
 
 Polish never changes what your text says. It may not add, remove or alter a fact, name, number,
 quotation or link, and it will not make a tentative claim confident or a confident one tentative —
-a guarantee the fixture suite tests on every run, because a rewrite is not something you can check
-at a glance the way a spelling fix is.
+a guarantee the accuracy suite (`--fixtures`) is what proves, because a rewrite is not something
+you can check at a glance the way a spelling fix is.
 
 **No API key. Ever.** McGrammar shells out to the official `claude` binary that you installed and
 authenticated yourself. It never sees, stores, or transmits a credential, and it strips
@@ -171,11 +171,15 @@ app's own self-test. You can also run that self-test directly at any time:
 ~/Applications/McGrammar.app/Contents/MacOS/McGrammar --selftest
 ```
 
-And correct text straight from a pipe, no GUI involved:
+And rewrite text straight from a pipe, no GUI involved. `--fix` runs the default preset (Polish);
+pass `--proofread` for the conservative pass:
 
 ```bash
-echo "this are a sentense with mistake" | \
+echo "We would like to make a discussion about the report." | \
   ~/Applications/McGrammar.app/Contents/MacOS/McGrammar --fix
+
+echo "this are a sentense with mistake" | \
+  ~/Applications/McGrammar.app/Contents/MacOS/McGrammar --fix --proofread
 ```
 
 ### Manual smoke test

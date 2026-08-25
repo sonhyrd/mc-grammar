@@ -136,15 +136,20 @@ enum TextCapture {
     @discardableResult
     static func paste(_ text: String) -> PasteOutcome {
         let pasteboard = NSPasteboard.general
+        // Re-checked here, not just at the top of the fix: the grant can be revoked while the CLI
+        // call is in flight, and a synthetic keystroke posted without it is silently dropped.
+        //
+        // Checked BEFORE the clipboard is written, not after. The caller's failure toast says the
+        // user's text was not changed; writing the correction to the pasteboard first would make
+        // that true of the selection and false of the clipboard, which the user then has to
+        // notice and undo. Refusing here leaves the machine exactly as it was found.
+        guard hasAccessibilityPermission else {
+            return PasteOutcome(delivered: false, changeCount: pasteboard.changeCount)
+        }
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         // Give the pasteboard server a beat to publish before the paste lands.
         usleep(60_000)
-        // Re-checked here, not just at the top of the fix: the grant can be revoked while the CLI
-        // call is in flight, and a synthetic keystroke posted without it is silently dropped.
-        guard hasAccessibilityPermission else {
-            return PasteOutcome(delivered: false, changeCount: pasteboard.changeCount)
-        }
         let delivered = sendKeystroke(virtualKey: CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
         return PasteOutcome(delivered: delivered, changeCount: pasteboard.changeCount)
     }
