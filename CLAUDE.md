@@ -4,9 +4,11 @@ Context and hard invariants for Claude Code sessions in this repository.
 
 ## What this is
 
-A macOS menu bar utility (Swift + AppKit, SPM, **zero third-party dependencies**) that corrects the
+A macOS menu bar utility (Swift + AppKit, SPM, **zero third-party dependencies**) that rewrites the
 user's selected text in any app by shelling out to their locally installed, locally authenticated
-Claude Code CLI. Two independent trigger paths: a global hotkey (⌃⌥D) and an NSServices menu item.
+Claude Code CLI. Two presets — **Polish** (fluency, the default) and **Proofread** (surface errors
+only) — reachable from two independent trigger paths: global hotkeys (⌃⌥D and ⌃⌥⇧D) and NSServices
+menu items. Vocabulary is in `CONTEXT.md`; the preset decision is ADR 0002.
 
 ## Invariants — do not violate these
 
@@ -98,9 +100,36 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
   `docs/adr/0001-isolate-the-claude-code-invocation.md`, not here. Read it before changing any
   number in this section.
 
+### Presets
+- Two, and **`Preset.standard` is the single line that decides which one the primary gesture runs**.
+  Changing it must be accompanied by bumping `AppDelegate.defaultPresetNoticeGeneration`, or
+  existing users get a gesture that quietly does something else. The flip and its on-screen signal
+  ship together — a build where Polish is default and nothing says so silently rewrites the user's
+  text.
+- Every preset must be reachable from **both** trigger paths. The alternate preset is what a user
+  reaches for when the default did something they did not want, so it must never be the one that is
+  unreachable in an app that exposes only one path.
+- `factualIntegrity` is stated first in Polish's prompt, with its reason, and is proved by the
+  `polish-factual-integrity` fixture. The clause, the fixture and `CONTEXT.md` share the name on
+  purpose. Weakening the fixture silently unbacks the guarantee the README makes.
+- **The success toast is not decoration.** Under Polish the user cannot see what changed — that is
+  the point — so the toast naming the preset is the only signal that a rewrite rather than a
+  correction happened. It fires on every successful fix, on both paths.
+- **The two paths know different things and must not claim the same thing.** The hotkey path posts
+  the ⌘V itself and reports whether it was delivered; the Services path hands the text back and
+  macOS replaces the selection afterwards with no callback, so it can only report the handover.
+  Do not "unify" the wording.
+
 ### NSServices (Info.plist)
 - `NSMessage` must exactly equal the `@objc` selector name on `NSApp.servicesProvider`:
-  `fixGrammar` ↔ `fixGrammar(_:userData:error:)`.
+  `fixGrammar` ↔ `fixGrammar(_:userData:error:)`, `polishText` ↔ `polishText(_:userData:error:)`.
+  `--selftest` checks every declared `NSMessage` against a real selector, because nothing validates
+  these strings at build time and a typo registers a menu item that silently does nothing.
+- Service selectors bind to a **preset**, not to whichever preset is default, so flipping the
+  default cannot change what an entry does. `fixGrammar` predates the split and means Proofread.
+- **No `NSKeyEquivalent`.** It used to declare ⌘⌃⇧G, which the app never registered. The Carbon
+  hotkeys are the single keyboard mechanism; adding one back binds the same gesture twice on an
+  action that irreversibly overwrites the selection.
 - `NSSendTypes` **and** `NSReturnTypes` both `NSStringPboardType`. Removing `NSReturnTypes` makes
   the service send-only and selection replacement silently stops working.
 - `NSTimeout` = `120000` ms. The default is far too short for Claude Code spin-up.
@@ -159,8 +188,12 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 
 - `./scripts/local-test.sh` — full pre-flight (macOS only).
 - `McGrammar --selftest` — headless: CLI discovery, env hygiene, Info.plist wiring, a real fix.
-- `McGrammar --fix` — stdin → corrected text on stdout.
-- `McGrammar --fixtures` — the live accuracy suite (15 cases, ~40s, costs money, needs a login).
+- `McGrammar --fix` — stdin → corrected text on stdout, byte-faithful (it writes rather than
+  prints, so the text's own trailing whitespace is not doubled). Takes `--polish` / `--proofread`.
+- `McGrammar --fixtures` — the live accuracy suite (21 cases, ~60s, costs money, needs a login).
+  Polish's idiom cases assert **removal, not replacement**: the stilted phrasing is forbidden and no
+  particular replacement is required. A fixture that demanded specific wording would go red on a
+  good rewrite, and a suite that fails on good output gets ignored.
   Not part of `--selftest` or `swift test` because it isn't free to run on every build, but it is
   mandatory after touching `Preset.prompt`, `Preset.role`, or any invocation
   flag — it is what caught the prompt-placement failure recorded in the ADR, and `--selftest`'s
@@ -170,10 +203,12 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 ## Roadmap (post-v1, priority order)
 
 1. **Diff preview HUD** before applying: floating panel, Tab = accept, R = regenerate, Esc = cancel.
-   Biggest UX win over blind replacement.
+   Biggest UX win over blind replacement, and worth more now that the default rewrites phrasing.
 2. **Streaming** via `--output-format stream-json` for perceived speed.
-3. **Prompt presets** (Fix / Polish / Translate / Casual↔Formal) with a settings window and
-   per-preset hotkeys.
+3. ~~**Prompt presets**~~ — Proofread and Polish shipped with per-preset hotkeys (ADR 0002).
+   Remaining: a settings window, and Translate / Casual↔Formal as further presets. A register-shifting
+   preset is the one licensed to change what the text says about itself; keep it an explicit choice
+   and never a default.
 4. **Async services variant**: return immediately and paste when done. Unblocks the calling app at
    the cost of requiring Accessibility — make it opt-in.
 5. **Fallback provider toggle**: direct Anthropic API (Haiku) for sub-second fixes. Also the

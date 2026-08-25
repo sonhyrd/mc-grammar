@@ -1,3 +1,20 @@
+> **Superseded in part — read this first.**
+>
+> This note's headline recommendation, to move the correction rules out of `-p` and into
+> `--system-prompt`, is **refuted by measurement in this repository**. See
+> `docs/adr/0001-isolate-the-claude-code-invocation.md`: rules in `--system-prompt` scored 7/15
+> against 14/14 with them in `-p`, and the failures are silent — the text usually comes back
+> unchanged, and occasionally a list of corrections is pasted over the user's selection. The rules
+> live in `-p`. Do not act on §0.1, §1.3, §2.1 or §4.4 of this note.
+>
+> Also superseded: the `--safe-mode` recommendation (§0.2, §2.4). The app already isolates the
+> invocation with `--setting-sources ""`, `--tools ""` and `--strict-mcp-config`, reaching ~$0.0003
+> per fix against `--safe-mode`'s ~$0.002. `--safe-mode` was verified safe but never measured
+> better; it is recorded as a rejected alternative in `docs/adr/0002-polish-preset-default.md`.
+>
+> What stands: the linguistics in §3, the failure-mode analysis in §5, and the argument against
+> shipping few-shot examples in §6. Those shaped the Polish prompt and the fixture design.
+
 # Prompt design for fluency polish, not just grammar correction
 
 Research note for McGrammar. Written 2026-08-25 against Claude Code CLI **v2.1.245** (the version

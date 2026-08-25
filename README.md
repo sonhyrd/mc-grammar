@@ -1,10 +1,21 @@
 # McGrammar
 
-A macOS menu bar utility that fixes grammar, spelling, and punctuation in **any** app — powered by
-the Claude Code CLI you already have installed and logged into.
+A macOS menu bar utility that makes your writing read like a native speaker's, in **any** app —
+powered by the Claude Code CLI you already have installed and logged into.
 
 Highlight text anywhere, hit ⌃⌥D (or right-click → Services), and the selection is replaced in
-place with a corrected version.
+place. Two presets:
+
+- **Polish** (⌃⌥D, the default) — fixes the errors *and* the phrasing: idiomatic word choice,
+  articles and prepositions, word order, sentence rhythm. For text that is already grammatical and
+  still reads as stilted, which is the thing spellcheck cannot help with.
+- **Proofread** (⌃⌥⇧D) — spelling, grammar and punctuation only. Minimum change. Reach for it when
+  you want to be certain nothing but a mistake was touched.
+
+Polish never changes what your text says. It may not add, remove or alter a fact, name, number,
+quotation or link, and it will not make a tentative claim confident or a confident one tentative —
+a guarantee the fixture suite tests on every run, because a rewrite is not something you can check
+at a glance the way a spelling fix is.
 
 **No API key. Ever.** McGrammar shells out to the official `claude` binary that you installed and
 authenticated yourself. It never sees, stores, or transmits a credential, and it strips
@@ -87,9 +98,10 @@ the empty folder itself stays behind.
 
 | | Hotkey | Services menu |
 |---|---|---|
-| Trigger | ⌃⌥D | select → right-click → Services → **Fix Grammar with McGrammar** |
+| Trigger | ⌃⌥D (Polish), ⌃⌥⇧D (Proofread) | select → right-click → Services → **Polish with McGrammar** or **Proofread with McGrammar** |
 | Permission | Accessibility required | none |
 | Behaviour | copies the selection, pastes the fix back, restores your clipboard | macOS replaces the selection natively |
+| Confirmation | McGrammar posts the ⌘V itself, so the toast means the paste was delivered | McGrammar hands the text back and macOS replaces the selection afterwards, with no callback — the toast means the text was returned, not that the replacement landed |
 | Caveat | some apps block synthetic keystrokes | the calling app freezes while Claude thinks |
 
 Both exist on purpose: whichever one a given app blocks, the other usually works.
@@ -105,8 +117,8 @@ not for read-only text such as an article body or a PDF.
 
 **Chrome, and Electron apps generally, do not show Services in their right-click menu.** Those
 menus are drawn by the app itself rather than by macOS, and they simply leave Services out. It is
-not a McGrammar bug and nothing in the app can change it. In Chrome, use ⌃⌥D, or reach the same
-service from the menu bar via **Chrome → Services**. This is exactly why both paths exist.
+not a McGrammar bug and nothing in the app can change it. In Chrome, use ⌃⌥D or ⌃⌥⇧D, or reach the same
+services from the menu bar via **Chrome → Services**. This is exactly why both paths exist.
 
 ### Granting Accessibility (hotkey only)
 
@@ -138,8 +150,8 @@ identifier instead, so the grant now survives rebuilds.
 macOS caches the Services menu aggressively. This looks like a bug and is not one.
 
 1. `./make-app.sh` already runs `pbs -flush` and `pbs -update`.
-2. Enable it: System Settings → Keyboard → Keyboard Shortcuts → Services → Text →
-   **Fix Grammar with McGrammar**.
+2. Enable them: System Settings → Keyboard → Keyboard Shortcuts → Services → Text →
+   **Polish with McGrammar** and **Proofread with McGrammar**.
 3. Some apps only rebuild their Services menu on launch — restart the app you are testing in.
 4. Worst case, log out and back in once.
 
@@ -168,17 +180,18 @@ echo "this are a sentense with mistake" | \
 
 ### Manual smoke test
 
-1. Open Notes, type `this are a sentense with mistake`, select it.
-2. Press ⌃⌥D. After a few seconds the text is replaced.
-3. Undo (⌘Z), reselect, and try right-click → Services → Fix Grammar with McGrammar.
-4. Paste (⌘V) somewhere: your original clipboard should still be there.
+1. Open Notes, type `We would like to make a discussion about the issue.`, select it.
+2. Press ⌃⌥D. After a few seconds it is replaced, and a toast says **Polished**.
+3. Undo (⌘Z), reselect, press ⌃⌥⇧D: Proofread leaves the phrasing alone.
+4. Undo, reselect, and try right-click → Services → Polish with McGrammar.
+5. Paste (⌘V) somewhere: your original clipboard should still be there.
 
 ## What to expect
 
 - **3–8 seconds per fix.** Each invocation spins up a Claude Code session. This is inherent to the
   approach, not a bug — the menu bar glyph tells you when it is working.
 - Headless `claude -p` draws on your subscription's programmatic credit pool, which is capped
-  monthly. Fine for grammar fixes; worth knowing if you lean on it hard.
+  monthly. Fine for everyday fixes; worth knowing if you lean on it hard.
 - Inside a Claude Code session, `/status` should show a Login method row and no API key row.
 
 ## Privacy
