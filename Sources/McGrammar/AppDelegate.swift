@@ -217,8 +217,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { return }
 
             switch result {
-            case .success(let corrected):
-                let pastedChangeCount = TextCapture.paste(corrected)
+            case .success(let outcome):
+                let pastedChangeCount = TextCapture.paste(outcome.text)
                 StatusIcon.shared.setState(.idle)
                 // Stay busy until the clipboard is back to how the user left it. Releasing the
                 // guard at completion instead would let a second ⌃⌥D snapshot the correction that
