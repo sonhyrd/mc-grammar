@@ -12,6 +12,13 @@ struct Fixture {
     let input: String
     let required: [String]
     let forbidden: [String]
+    /// Substrings that must appear an exact number of times. `required` cannot express this: a
+    /// closing "```" is a substring of the opening "```js", so presence alone is satisfied by an
+    /// unbalanced fence and the case cannot fail for the thing it exists to detect.
+    var requiredCounts: [String: Int] = [:]
+    /// Which preset this case exercises. Defaulted so the original correction cases read exactly
+    /// as they did before presets existed.
+    var preset: Preset = .proofread
 }
 
 /// `McGrammar --fixtures` — a deliberate accuracy suite for the pinned model. See CLAUDE.md and
@@ -145,10 +152,94 @@ enum Fixtures {
                 "build notify", "build, notify", "build. Notify", "build and notify",
             ]
         ),
+
+        // ── Polish ───────────────────────────────────────────────────────────────────────────
+        //
+        // These assert REMOVAL, not replacement. An idiom case that required a particular
+        // replacement wording would be asserting one right answer where many exist, and would go
+        // red on a perfectly good rewrite. A suite that fails on good output gets ignored, and an
+        // ignored suite is worse than no suite because it still reads as protection. So the
+        // stilted phrasing from the input is forbidden, the case passes when Polish stopped saying
+        // the awkward thing whatever it chose instead, and `required` carries planted facts only —
+        // never wording.
+        Fixture(
+            name: "polish-factual-integrity",
+            annotation: "MUST PRESERVE: a name, a number, a quotation and a URL, through a rewrite",
+            input: """
+                Priya has made the statement to the team that "the cache is not the bottleneck", \
+                however our p99 latency was 412 ms before the shipping of it, and the full writeup \
+                is existing at https://example.com/reports/q3-latency for anyone who is wanting \
+                the details.
+                """,
+            required: ["Priya", "412", "the cache is not the bottleneck", "https://example.com/reports/q3-latency"],
+            // The surrounding prose is stilted on purpose: if Polish returned this untouched the
+            // required substrings would pass trivially and the case would prove nothing.
+            forbidden: ["has made the statement", "the shipping of it", "is existing at"],
+            preset: .polish
+        ),
+        Fixture(
+            name: "polish-collocation",
+            annotation: "grammatical but non-native verb-noun collocations",
+            input: "We would like to make a discussion about the issue and take a decision before Friday.",
+            required: [],
+            forbidden: ["make a discussion", "take a decision"],
+            preset: .polish
+        ),
+        Fixture(
+            name: "polish-article-and-preposition-idiom",
+            annotation: "idiomatic articles and prepositions, which are learned word by word",
+            input: "According to me, we should discuss about the problem in the next week.",
+            required: [],
+            forbidden: ["According to me", "discuss about", "in the next week"],
+            preset: .polish
+        ),
+        Fixture(
+            name: "polish-nominalization",
+            annotation: "abstract nouns where a verb reads better",
+            input: "The system showed an improvement in performance after the implementation of the cache by the team.",
+            required: [],
+            forbidden: ["showed an improvement", "the implementation of the cache"],
+            preset: .polish
+        ),
+        Fixture(
+            name: "polish-no-invented-fence",
+            annotation: "must NOT ADD: a code fence the input never had",
+            input: "When the parser is receiving a null input it is doing a throw of an error, and we are needing to make a handling of that case in a better way.",
+            required: [],
+            forbidden: ["```"],
+            preset: .polish
+        ),
+        Fixture(
+            name: "polish-preserve-fenced-block",
+            annotation: "must LEAVE ALONE: a fenced code block, while polishing the prose around it",
+            input: """
+                The below mentioned function is having a issue in the case when the input is null.
+
+                ```js
+                if (x == null) { return err; }
+                ```
+
+                We are needing to make a handling of this in a better way.
+                """,
+            // The fence and its contents must survive byte-for-byte. sanitize() was deleted partly
+            // so that a selection which legitimately is fenced comes back intact; this is the case
+            // that proves the model does not undo that on its own.
+            required: ["```js", "if (x == null) { return err; }"],
+            forbidden: ["below mentioned", "is having a issue"],
+            // Counted, not merely present: "```" occurs inside "```js", so a required substring
+            // would pass on an output that opened the fence and never closed it. Exactly two is
+            // the property — one opening, one closing, and no fence the input did not have.
+            requiredCounts: ["```": 2],
+            preset: .polish
+        ),
     ]
 
     static func run() -> Int32 {
-        print("McGrammar fixture suite — \(all.count) case(s)")
+        let byPreset = Dictionary(grouping: all, by: { $0.preset })
+        let summary = Preset.allCases
+            .compactMap { preset in byPreset[preset].map { "\(preset.displayName) \($0.count)" } }
+            .joined(separator: ", ")
+        print("McGrammar fixture suite — \(all.count) case(s) (\(summary))")
         print(String(repeating: "─", count: 52))
 
         var failureCount = 0
@@ -156,9 +247,9 @@ enum Fixtures {
 
         for fixture in all {
             let caseStarted = Date()
-            print("· \(fixture.name) [\(fixture.annotation)]")
+            print("· \(fixture.name) [\(fixture.preset.displayName): \(fixture.annotation)]")
 
-            switch ClaudeRunner.shared.fixSync(fixture.input) {
+            switch ClaudeRunner.shared.fixSync(fixture.input, preset: fixture.preset) {
             case .failure(let failure):
                 failureCount += 1
                 print("  ✗ CLI call failed: \(failure.description)")
@@ -174,6 +265,13 @@ enum Fixtures {
                 for needle in fixture.forbidden where text.contains(needle) {
                     caseFailed = true
                     print("  ✗ found forbidden substring: \"\(needle)\"")
+                }
+                for (needle, expected) in fixture.requiredCounts {
+                    let actual = text.components(separatedBy: needle).count - 1
+                    if actual != expected {
+                        caseFailed = true
+                        print("  ✗ expected \(expected)x \"\(needle)\", found \(actual)")
+                    }
                 }
 
                 let elapsed = Date().timeIntervalSince(caseStarted)

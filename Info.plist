@@ -30,7 +30,30 @@
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
-				<string>Fix Grammar with McGrammar</string>
+				<string>Polish with McGrammar</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>polishText</string>
+			<key>NSPortName</key>
+			<string>McGrammar</string>
+			<key>NSSendTypes</key>
+			<array>
+				<string>NSStringPboardType</string>
+				<string>public.utf8-plain-text</string>
+			</array>
+			<key>NSReturnTypes</key>
+			<array>
+				<string>NSStringPboardType</string>
+				<string>public.utf8-plain-text</string>
+			</array>
+			<key>NSTimeout</key>
+			<string>120000</string>
+		</dict>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Proofread with McGrammar</string>
 			</dict>
 			<key>NSMessage</key>
 			<string>fixGrammar</string>
@@ -48,11 +71,6 @@
 			</array>
 			<key>NSTimeout</key>
 			<string>120000</string>
-			<key>NSKeyEquivalent</key>
-			<dict>
-				<key>default</key>
-				<string>@^$g</string>
-			</dict>
 		</dict>
 	</array>
 </dict>

@@ -118,18 +118,40 @@ enum TextCapture {
         return text
     }
 
-    /// Puts `text` on the clipboard and simulates ⌘V into the focused app. Returns the pasteboard's
-    /// change count afterwards, so the caller can tell whether anything else has written to the
-    /// clipboard before it restores — see `restore(_:ifUnchangedSince:)`.
+    /// What `paste` managed to do.
+    ///
+    /// `delivered` is deliberately a narrow claim: the ⌘V was constructed and posted. Whether the
+    /// focused app actually inserted the text is not observable from here, and pretending otherwise
+    /// would be the same overreach the Services path has to avoid. What it does rule out is the
+    /// case that matters — the Accessibility grant being revoked while the fix was in flight, so
+    /// nothing was ever delivered and the caller would otherwise report a success.
+    struct PasteOutcome {
+        let delivered: Bool
+        /// The pasteboard's change count afterwards, so the caller can tell whether anything else
+        /// has written to the clipboard before it restores — see `restore(_:ifUnchangedSince:)`.
+        let changeCount: Int
+    }
+
+    /// Puts `text` on the clipboard and simulates ⌘V into the focused app.
     @discardableResult
-    static func paste(_ text: String) -> Int {
+    static func paste(_ text: String) -> PasteOutcome {
         let pasteboard = NSPasteboard.general
+        // Re-checked here, not just at the top of the fix: the grant can be revoked while the CLI
+        // call is in flight, and a synthetic keystroke posted without it is silently dropped.
+        //
+        // Checked BEFORE the clipboard is written, not after. The caller's failure toast says the
+        // user's text was not changed; writing the correction to the pasteboard first would make
+        // that true of the selection and false of the clipboard, which the user then has to
+        // notice and undo. Refusing here leaves the machine exactly as it was found.
+        guard hasAccessibilityPermission else {
+            return PasteOutcome(delivered: false, changeCount: pasteboard.changeCount)
+        }
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         // Give the pasteboard server a beat to publish before the paste lands.
         usleep(60_000)
-        sendKeystroke(virtualKey: CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
-        return pasteboard.changeCount
+        let delivered = sendKeystroke(virtualKey: CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
+        return PasteOutcome(delivered: delivered, changeCount: pasteboard.changeCount)
     }
 
     /// Restores the snapshot only if the clipboard still holds what we put there. If something
@@ -140,18 +162,26 @@ enum TextCapture {
         restore(snapshot)
     }
 
-    private static func sendKeystroke(virtualKey: CGKeyCode, flags: CGEventFlags) {
+    /// Returns whether both halves of the keystroke were constructed and posted. `CGEvent` returns
+    /// nil rather than throwing when it cannot make an event, so without this the failure is
+    /// entirely silent.
+    @discardableResult
+    private static func sendKeystroke(virtualKey: CGKeyCode, flags: CGEventFlags) -> Bool {
         let source = CGEventSource(stateID: .combinedSessionState)
         source?.setLocalEventsFilterDuringSuppressionState(
             [.permitLocalMouseEvents, .permitLocalKeyboardEvents],
             state: .eventSuppressionStateSuppressionInterval
         )
 
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true)
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false)
-        keyDown?.flags = flags
-        keyUp?.flags = flags
-        keyDown?.post(tap: .cgAnnotatedSessionEventTap)
-        keyUp?.post(tap: .cgAnnotatedSessionEventTap)
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false)
+        else {
+            return false
+        }
+        keyDown.flags = flags
+        keyUp.flags = flags
+        keyDown.post(tap: .cgAnnotatedSessionEventTap)
+        keyUp.post(tap: .cgAnnotatedSessionEventTap)
+        return true
     }
 }

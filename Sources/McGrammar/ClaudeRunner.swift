@@ -150,27 +150,9 @@ final class ClaudeRunner {
     /// cost or behaviour change.
     static let model = "claude-haiku-4-5-20251001"
 
-    /// The single source of truth for the correction rules. Tuned and deliberately strict —
-    /// loosening this makes Claude rewrite instead of correct.
-    ///
-    /// These live in `-p`, NOT in `--system-prompt`, and that placement is load-bearing. Moving
-    /// them into the system prompt and reducing `-p` to a bare pointer reads tidier and measures
-    /// identically on a short input — but on a long, multi-error paragraph it fails roughly half
-    /// the time, usually by returning the user's text completely unchanged and occasionally by
-    /// emitting a list of corrections ("their → they're") that then gets pasted over the
-    /// selection. Measured on the hard fixture: 7/15 correct with the rules in `--system-prompt`,
-    /// 14/14 correct with them here. Do not "tidy" this back.
-    static let prompt = """
-        Fix the grammar, spelling, and punctuation of the text provided via stdin. \
-        Preserve the author's voice, tone, formatting, and line breaks. \
-        Do NOT rewrite or rephrase beyond what is needed for correctness. \
-        Output ONLY the corrected text. No preamble, no quotes, no explanations, no markdown fences.
-        """
-
-    /// Replaces Claude Code's ~3,300-token agent preamble, which is all about git status, tool
-    /// discipline and output styles — none of it applicable here. Deliberately just a role line:
-    /// the rules belong in `prompt`, for the reason documented above.
-    static let systemPrompt = "You are a grammar corrector. Output only corrected text."
+    // The prompts moved to `Preset`. Their placement did not: the rules stay in `-p` and
+    // `--system-prompt` stays a one-line role, for the measured reason recorded on `Preset.prompt`
+    // and in docs/adr/0001-isolate-the-claude-code-invocation.md.
 
     /// Written by `resolveBinary()` on a background queue and read from the main thread (menu,
     /// self-test) and from `fixSync` on either. Every access goes through `lock` — an
@@ -322,7 +304,15 @@ final class ClaudeRunner {
     /// - Parameter timeout: how long to wait before the watchdog fires. Defaults to
     ///   `hotkeyTimeout`; the Services path passes `servicesTimeout` explicitly since it blocks
     ///   the host application's main thread.
-    func fixSync(_ text: String, timeout: TimeInterval = ClaudeRunner.hotkeyTimeout) -> Result<FixOutcome, FixError> {
+    /// `preset` has no default on purpose. `Preset.standard` is the one place that decides what the
+    /// primary gesture runs; a default here would be a second, quieter answer to the same question,
+    /// and the next caller to omit the argument would silently get whatever this signature says
+    /// rather than what the app's default is.
+    func fixSync(
+        _ text: String,
+        preset: Preset,
+        timeout: TimeInterval = ClaudeRunner.hotkeyTimeout
+    ) -> Result<FixOutcome, FixError> {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.emptyInput) }
 
@@ -343,13 +333,13 @@ final class ClaudeRunner {
         // Deliberately blinded, single-purpose invocation — see CLAUDE.md "Invocation". Every flag
         // here is load-bearing and was measured; do not drop one to "restore" the user's settings.
         process.arguments = [
-            "-p", Self.prompt,
+            "-p", preset.prompt,
             "--max-turns", "1",
             "--model", Self.model,
             "--setting-sources", "",
             "--tools", "",
             "--strict-mcp-config",
-            "--system-prompt", Self.systemPrompt,
+            "--system-prompt", preset.role,
             "--output-format", "json",
         ]
         process.environment = childEnvironment()
@@ -458,25 +448,64 @@ final class ClaudeRunner {
         guard let model = response.canonicalModel else {
             return .failure(.malformedResponse(raw.trimmingCharacters(in: .whitespacesAndNewlines)))
         }
-        let text = response.result.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return .failure(.emptyOutput) }
+        let corrected: String
+        switch Self.restoreOuterWhitespace(from: text, onto: response.result) {
+        case .success(let value): corrected = value
+        case .failure(let error): return .failure(error)
+        }
 
         return .success(FixOutcome(
-            text: text,
+            text: corrected,
             model: model,
             thinkingTokens: response.usage.outputTokensDetails?.thinkingTokens ?? 0,
             durationMs: response.durationMs
         ))
     }
 
+    // MARK: - Output shaping
+
+    /// Puts the selection's own leading and trailing whitespace back onto the model's answer.
+    ///
+    /// The model is told to reproduce the input's structure, but its answer still arrives with
+    /// whatever incidental whitespace it chose, and the envelope's `result` cannot be trusted to
+    /// have preserved a trailing newline. So the outer whitespace is not negotiated with the
+    /// model at all: it is stripped from the answer and taken verbatim from the input. On the
+    /// Services path the selection boundary is exactly what macOS replaces, so a swallowed
+    /// trailing newline visibly welds two paragraphs together.
+    ///
+    /// ORDERING IS LOAD-BEARING: the empty check runs on the model's own content, BEFORE the
+    /// captured whitespace goes back on. Re-applying first and testing after would turn a
+    /// whitespace-only answer into a non-empty string and paste it over the user's selection as a
+    /// success — the same "a truncated answer must never read as success" failure the watchdog
+    /// exists to prevent, arriving through a different door.
+    ///
+    /// Pure and `internal` on purpose: this is the one piece of shaping logic that can be proved
+    /// without spawning the CLI, and `--selftest` proves it on every run for free.
+    static func restoreOuterWhitespace(from original: String, onto raw: String) -> Result<String, FixError> {
+        let core = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !core.isEmpty else { return .failure(.emptyOutput) }
+
+        // An all-whitespace original would have leading and trailing overlap and double up. Callers
+        // are guarded by `.emptyInput`, but this function is reachable from tests and must not
+        // depend on a caller's guard for its own correctness.
+        guard original.contains(where: { !$0.isWhitespace }) else { return .success(core) }
+
+        let leading = String(original.prefix(while: { $0.isWhitespace }))
+        // No `suffix(while:)` on String — walk the reversed view and flip the result back.
+        let trailing = String(original.reversed().prefix(while: { $0.isWhitespace }).reversed())
+        return .success(leading + core + trailing)
+    }
+
     /// Async wrapper for the hotkey path only: runs the sync core off-main, completes on main.
+    /// `preset` has no default, for the reason on `fixSync`.
     func fixAsync(
         _ text: String,
+        preset: Preset,
         timeout: TimeInterval = ClaudeRunner.hotkeyTimeout,
         completion: @escaping (Result<FixOutcome, FixError>) -> Void
     ) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = self.fixSync(text, timeout: timeout)
+            let result = self.fixSync(text, preset: preset, timeout: timeout)
             DispatchQueue.main.async { completion(result) }
         }
     }

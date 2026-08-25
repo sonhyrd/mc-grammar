@@ -4,9 +4,11 @@ Context and hard invariants for Claude Code sessions in this repository.
 
 ## What this is
 
-A macOS menu bar utility (Swift + AppKit, SPM, **zero third-party dependencies**) that corrects the
+A macOS menu bar utility (Swift + AppKit, SPM, **zero third-party dependencies**) that rewrites the
 user's selected text in any app by shelling out to their locally installed, locally authenticated
-Claude Code CLI. Two independent trigger paths: a global hotkey (⌃⌥D) and an NSServices menu item.
+Claude Code CLI. Two presets — **Polish** (fluency, the default) and **Proofread** (surface errors
+only) — reachable from two independent trigger paths: global hotkeys (⌃⌥D and ⌃⌥⇧D) and NSServices
+menu items. Vocabulary is in `CONTEXT.md`; the preset decision is ADR 0002.
 
 ## Invariants — do not violate these
 
@@ -57,15 +59,16 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 - `--setting-sources ""` and `--tools ""`, not `--settings <file>` — `--settings` *merges* into
   the user's resolved config rather than replacing it, so it cannot produce an isolated
   invocation. See the ADR's "Rejected alternatives."
-- **The correction rules live in `-p`, not `--system-prompt`, and that placement is an INVARIANT.**
-  `--system-prompt` is a one-line role only (`"You are a grammar corrector. Output only corrected
-  text."`). Moving the rules into `--system-prompt` reads tidier and measures identically on a
+- **A preset's rules live in `-p`, not `--system-prompt`, and that placement is an INVARIANT.**
+  `--system-prompt` carries a one-line role only, per preset (`Preset.role`). Moving the rules into
+  `--system-prompt` reads tidier and measures identically on a
   short input, but on a long multi-error paragraph it fails roughly half the time — 7/15 correct
   vs. 14/14 with the rules in `-p` — and the failures are silent: the user's text usually comes
   back unchanged, occasionally a list of corrections gets pasted over the selection instead of the
-  fix. See the ADR for the full finding. Any change to `ClaudeRunner.prompt` or
-  `ClaudeRunner.systemPrompt` must be verified with `--fixtures` before merging; `--selftest`'s one
-  easy sample would not have caught this.
+  fix. See the ADR for the full finding. Any change to `Preset.prompt` or `Preset.role` must be
+  verified with `--fixtures` before merging; `--selftest`'s one easy sample would not have caught
+  this. (ADR 0001 names these `ClaudeRunner.prompt` / `ClaudeRunner.systemPrompt`, which is where
+  they lived when it was written; the decision it records is unchanged.)
 - The user's selected text goes over **stdin**, written after the watchdog is armed — never
   interpolated into `-p`, the rest of the argument list, or a shell string.
 - `MAX_THINKING_TOKENS=0` in the child environment (undocumented CLI env var, not a flag — hence
@@ -82,17 +85,59 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 - `NSTimeout` in Info.plist stays **120000ms** regardless of the above — it bounds how long macOS
   waits for the whole Services round trip including its own dispatch overhead, not just the child
   process, and the default is far too short for Claude Code spin-up.
-- `sanitize()` was deleted: nothing in this invocation reaches a shell, so there was nothing to
-  sanitize against — stdin plus `Process.arguments` never touch a shell interpreter.
+- `sanitize()` was deleted because `--output-format json` removed the ambiguity it existed to
+  resolve, **not** for any shell-safety reason. It was output hygiene — it stripped Markdown fences
+  and preamble from the model's raw stdout — and never had anything to do with shell injection.
+  With the JSON envelope, `result` is a typed string field, so a fence inside it is unambiguously
+  content rather than framing, and there is nothing left to disambiguate. Do not restore
+  fence-stripping: a selection that legitimately *is* a fenced code block, correctly returned
+  unchanged, would have its fences eaten and be pasted back malformed. If the model ever starts
+  emitting a fence the input did not have, that is a prompt regression and `--fixtures` is where it
+  gets caught.
 - Drain stdout and stderr concurrently; a blocked pipe buffer wedges the child.
 - Real, measured numbers — old vs. isolated invocation, wall clock vs. the CLI's internal
   `duration_ms`, and why the first latency figures were wrong — live in
   `docs/adr/0001-isolate-the-claude-code-invocation.md`, not here. Read it before changing any
   number in this section.
 
+### Presets
+- Two, and **`Preset.standard` is the single line that decides which one the primary gesture runs**.
+  Changing it must be accompanied by bumping `AppDelegate.defaultPresetNoticeGeneration`, or
+  existing users get a gesture that quietly does something else. The flip and its on-screen signal
+  ship together — a build where Polish is default and nothing says so silently rewrites the user's
+  text.
+- Every preset must be reachable from **both** trigger paths. The alternate preset is what a user
+  reaches for when the default did something they did not want, so it must never be the one that is
+  unreachable in an app that exposes only one path.
+- `factualIntegrity` is stated ahead of every other instruction in Polish's prompt — after the
+  one framing sentence, and claiming that primacy in its own words ("Before anything else, and
+  above every other instruction here") — with its reason, and is proved by the
+  `polish-factual-integrity` fixture. The clause, the fixture and `CONTEXT.md` share the name on
+  purpose. Weakening the fixture silently unbacks the guarantee the README makes.
+- **The success toast is not decoration.** Under Polish the user cannot see what changed — that is
+  the point — so the toast naming the preset is the only signal that a rewrite rather than a
+  correction happened. It fires on every successful fix, on both paths.
+- **The two paths know different things and must not claim the same thing.** The hotkey path posts
+  the ⌘V itself and reports whether it was delivered; the Services path hands the text back and
+  macOS replaces the selection afterwards with no callback, so it can only report the handover.
+  Do not "unify" the wording.
+
 ### NSServices (Info.plist)
 - `NSMessage` must exactly equal the `@objc` selector name on `NSApp.servicesProvider`:
-  `fixGrammar` ↔ `fixGrammar(_:userData:error:)`.
+  `fixGrammar` ↔ `fixGrammar(_:userData:error:)`, `polishText` ↔ `polishText(_:userData:error:)`.
+  `--selftest` checks every declared `NSMessage` against a real selector, because nothing validates
+  these strings at build time and a typo registers a menu item that silently does nothing.
+- Service selectors bind to a **preset**, not to whichever preset is default, so flipping the
+  default cannot change what an entry does. `fixGrammar` predates the split and means Proofread.
+  The `NSMessage` strings live on `Preset.serviceMessage` so the plist, `ServiceProvider` and
+  `--selftest` name one set rather than three.
+- **The plist's entry order is not derived from `Preset.standard`** — it is hardcoded, so flipping
+  the default in code would otherwise leave the Services menu still leading with the old one.
+  `--selftest` asserts that the first entry's `NSMessage` equals `Preset.standard.serviceMessage`;
+  a flip means editing the plist order and titles too.
+- **No `NSKeyEquivalent`.** It used to declare ⌘⌃⇧G, which the app never registered. The Carbon
+  hotkeys are the single keyboard mechanism; adding one back binds the same gesture twice on an
+  action that irreversibly overwrites the selection.
 - `NSSendTypes` **and** `NSReturnTypes` both `NSStringPboardType`. Removing `NSReturnTypes` makes
   the service send-only and selection replacement silently stops working.
 - `NSTimeout` = `120000` ms. The default is far too short for Claude Code spin-up.
@@ -150,11 +195,17 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 ## Testing
 
 - `./scripts/local-test.sh` — full pre-flight (macOS only).
-- `McGrammar --selftest` — headless: CLI discovery, env hygiene, Info.plist wiring, a real fix.
-- `McGrammar --fix` — stdin → corrected text on stdout.
-- `McGrammar --fixtures` — the live accuracy suite (15 cases, ~40s, costs money, needs a login).
+- `McGrammar --selftest` — headless: CLI discovery, env hygiene, Info.plist wiring, and one real
+  fix **per preset** — two CLI calls, so it costs and takes roughly twice what it did before the
+  presets split.
+- `McGrammar --fix` — stdin → corrected text on stdout, byte-faithful (it writes rather than
+  prints, so the text's own trailing whitespace is not doubled). Takes `--polish` / `--proofread`.
+- `McGrammar --fixtures` — the live accuracy suite (21 cases, ~60s, costs money, needs a login).
+  Polish's idiom cases assert **removal, not replacement**: the stilted phrasing is forbidden and no
+  particular replacement is required. A fixture that demanded specific wording would go red on a
+  good rewrite, and a suite that fails on good output gets ignored.
   Not part of `--selftest` or `swift test` because it isn't free to run on every build, but it is
-  mandatory after touching `ClaudeRunner.prompt`, `ClaudeRunner.systemPrompt`, or any invocation
+  mandatory after touching `Preset.prompt`, `Preset.role`, or any invocation
   flag — it is what caught the prompt-placement failure recorded in the ADR, and `--selftest`'s
   one easy sample would not have.
 - The Services path cannot be tested from `swift run`; it requires the .app bundle.
@@ -162,10 +213,12 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 ## Roadmap (post-v1, priority order)
 
 1. **Diff preview HUD** before applying: floating panel, Tab = accept, R = regenerate, Esc = cancel.
-   Biggest UX win over blind replacement.
+   Biggest UX win over blind replacement, and worth more now that the default rewrites phrasing.
 2. **Streaming** via `--output-format stream-json` for perceived speed.
-3. **Prompt presets** (Fix / Polish / Translate / Casual↔Formal) with a settings window and
-   per-preset hotkeys.
+3. ~~**Prompt presets**~~ — Proofread and Polish shipped with per-preset hotkeys (ADR 0002).
+   Remaining: a settings window, and Translate / Casual↔Formal as further presets. A register-shifting
+   preset is the one licensed to change what the text says about itself; keep it an explicit choice
+   and never a default.
 4. **Async services variant**: return immediately and paste when done. Unblocks the calling app at
    the cost of requiring Accessibility — make it opt-in.
 5. **Fallback provider toggle**: direct Anthropic API (Haiku) for sub-second fixes. Also the

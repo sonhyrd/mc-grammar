@@ -11,6 +11,12 @@ final class Toast {
     private var panel: NSPanel?
     private var dismissWork: DispatchWorkItem?
 
+    /// How long a success message stays up. Short on purpose, and deliberately shorter than the
+    /// five seconds errors use: this fires after every successful fix on both trigger paths, so at
+    /// error length it would become noise the user learns to look past — costing the signal exactly
+    /// when it matters. One home rather than one per path, so the two cannot drift.
+    static let successDuration: TimeInterval = 2
+
     func show(_ message: String, isError: Bool = false, duration: TimeInterval = 3.0) {
         DispatchQueue.main.async { self.present(message, isError: isError, duration: duration) }
     }
