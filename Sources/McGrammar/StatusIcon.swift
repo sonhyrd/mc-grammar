@@ -48,7 +48,15 @@ final class StatusIcon {
         statusItem = item
     }
 
-    func setState(_ state: State) {
+    /// - Parameter mainThreadBlocked: pass `true` only from a caller that is itself parked
+    ///   synchronously on the fix for the entire duration `.working` is active — today, only
+    ///   `ServiceProvider.fixGrammar`, which calls `fixSync` directly on the main thread. Every
+    ///   other caller (the hotkey path's `fixAsync`, and any future one) leaves the main run loop
+    ///   free to spin, so the default is `false`: the elapsed-counter timer dispatches its mutation
+    ///   to the main queue instead of touching `NSButton` off-main. Defaulting to "not blocked" is
+    ///   deliberate — a new call site that forgets this parameter gets the safe behaviour, not a
+    ///   silent AppKit-threading violation.
+    func setState(_ state: State, mainThreadBlocked: Bool = false) {
         let apply = {
             self.revertWork?.cancel()
             guard let button = self.statusItem?.button else { return }
@@ -65,7 +73,7 @@ final class StatusIcon {
         }
 
         if state == .working {
-            startElapsedCounter()
+            startElapsedCounter(mainThreadBlocked: mainThreadBlocked)
         } else {
             stopElapsedCounter()
         }
@@ -83,54 +91,65 @@ final class StatusIcon {
     /// so a normal fix produces zero visual noise and a stuck one gets a fault indicator instead
     /// of a static glyph that never changes.
     ///
-    /// This has to be a GCD timer firing on its own background queue, not
-    /// `DispatchQueue.main.async` and not a `Timer` scheduled on the main `RunLoop`. The Services
-    /// path (`ServiceProvider.fixGrammar`) calls `fixSync` synchronously on the main thread, which
-    /// means the main run loop is not spinning for the entire duration of a fix: nothing enqueued
-    /// with `.main.async` runs until the fix has already finished (too late to matter), and a
-    /// main-RunLoop `Timer` never fires at all. So the handler below mutates `button.title` and
-    /// forces `displayIfNeeded()` directly from `counterQueue`, off the main thread — the same
-    /// "nudge a synchronous redraw" trick `setState` already uses, just invoked from a thread that
-    /// isn't blocked.
+    /// This is a GCD timer firing on its own background queue, not a main-RunLoop `Timer` —
+    /// on the Services path (`ServiceProvider.fixGrammar` calling `fixSync` synchronously on the
+    /// main thread) the main run loop is not spinning for the duration of the fix, so a
+    /// main-RunLoop `Timer` would never fire. `counterQueue` fires regardless of what the main
+    /// thread is doing.
     ///
-    /// AppKit does not officially support touching a view from a background thread under any
-    /// circumstances, so this is a deliberate, narrow exception: the main thread is provably
-    /// parked inside a synchronous `Process.waitUntilExit` call for the entire window this timer
-    /// is armed, so there is no concurrent main-thread access to `button` to race with.
+    /// What the handler does with that tick depends on `mainThreadBlocked`, learned from
+    /// `setState` and captured below:
     ///
-    /// VERIFICATION STATUS: confirmed in-process, not yet confirmed on-screen through a live
-    /// Services-menu invocation. With the threshold temporarily lowered, a harness reproduced the
-    /// exact blocking shape of `ServiceProvider.fixGrammar` — `setState(.working)` then a real,
-    /// synchronous `ClaudeRunner.fixSync` call on the main thread — while a second thread in the
-    /// same process polled `statusItem.button.title`. That poller observed the title flip from
-    /// "⋯" to "⋯ 1s" to "⋯ 2s" *during* the block, proving the off-main mutation reaches the
-    /// live `NSButton` object and is readable back, not silently dropped or racing to a stale
-    /// value. What that harness does NOT prove is that AppKit actually composited the change to
-    /// the screen: painting a view's backing store (`displayIfNeeded`) is separate from the
-    /// window server picking that up, and the latter can depend on the main run loop cycling,
-    /// which is exactly what's blocked here. Driving the real Services menu end to end needs
-    /// another app's UI on the interactive desktop, which wasn't exercised — this machine's
-    /// screen is shared, active, and running unrelated work, so screenshotting or scripting it
-    /// for this test was avoided rather than risk capturing that content. If a future check finds
-    /// the pixels never actually update on the Services path, the fallback named in ticket #7 is
-    /// to gate the mutation in this handler on `Thread.isMainThread` and accept hotkey-only
-    /// ticking.
-    private func startElapsedCounter() {
+    /// - **Main thread blocked (Services path only).** The main run loop is not spinning, so
+    ///   nothing enqueued with `.main.async` would run until the fix has already finished — too
+    ///   late to matter — and there is, by construction, no concurrent main-thread access to
+    ///   `button` to race with. So the handler mutates `button.title` and forces
+    ///   `displayIfNeeded()` directly from `counterQueue`, off the main thread. AppKit does not
+    ///   officially support touching a view from a background thread under any circumstances, so
+    ///   this remains a deliberate, narrow exception — but now its precondition (main is actually
+    ///   parked) is enforced by the caller passing `mainThreadBlocked: true`, not merely asserted
+    ///   in a comment. `ServiceProvider.fixGrammar` is the only call site that does.
+    /// - **Main thread free (hotkey path, and any future caller that doesn't opt in).** The
+    ///   hotkey path runs `fixSync` on a background queue via `fixAsync`; the main thread is not
+    ///   parked, it's free and spinning — so mutating `button` directly from `counterQueue` here
+    ///   would race with whatever the main thread is doing to the same `NSButton` at the same
+    ///   time. There is no "provably parked" precondition to lean on for this caller, so the
+    ///   handler instead dispatches the mutation to `DispatchQueue.main.async` — ordinary,
+    ///   correct AppKit usage, and it works fine because main is free to run it promptly.
+    ///
+    /// VERIFICATION STATUS: the off-main mutation on the blocked-main-thread path was confirmed
+    /// in-process — a harness reproduced the exact blocking shape of `ServiceProvider.fixGrammar`
+    /// (`setState(.working, mainThreadBlocked: true)` then a real, synchronous `fixSync` call on
+    /// the main thread) while a second thread in the same process polled
+    /// `statusItem.button.title`, which flipped "⋯" → "⋯ 1s" → "⋯ 2s" *during* the block. That
+    /// proves the mutation reaches the live `NSButton` object and is readable back, not silently
+    /// dropped or racing to a stale value. It does NOT prove AppKit actually composited the
+    /// change to the screen: painting a view's backing store (`displayIfNeeded`) is separate from
+    /// the window server picking that up, and the latter can depend on the main run loop cycling,
+    /// which is exactly what's blocked on this path. Driving the real Services menu end to end
+    /// needs another app's UI on the interactive desktop, which wasn't exercised — this machine's
+    /// screen is shared, active, and running unrelated work, so screenshotting or scripting it for
+    /// this test was avoided rather than risk capturing that content. If a future check finds the
+    /// pixels never actually update on the Services path, the fallback named in ticket #7 is to
+    /// drop the `mainThreadBlocked: true` off-main branch entirely and accept hotkey-only ticking.
+    private func startElapsedCounter(mainThreadBlocked: Bool) {
         counterLock.lock()
         workStartedAt = Date()
         counterLock.unlock()
 
+        counterLock.lock()
         counterTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: counterQueue)
         timer.schedule(deadline: .now() + 1, repeating: 1)
         timer.setEventHandler { [weak self] in
-            self?.tickElapsedCounter()
+            self?.tickElapsedCounter(mainThreadBlocked: mainThreadBlocked)
         }
         counterTimer = timer
         timer.resume()
+        counterLock.unlock()
     }
 
-    private func tickElapsedCounter() {
+    private func tickElapsedCounter(mainThreadBlocked: Bool) {
         counterLock.lock()
         let startedAt = workStartedAt
         counterLock.unlock()
@@ -138,17 +157,25 @@ final class StatusIcon {
 
         let elapsed = Date().timeIntervalSince(startedAt)
         guard elapsed >= Self.elapsedCounterThreshold else { return }
-        guard let button = statusItem?.button else { return }
 
-        button.title = "\(State.working.title) \(Int(elapsed))s"
-        button.needsDisplay = true
-        button.displayIfNeeded()
+        let mutate = { [weak self] in
+            guard let self, let button = self.statusItem?.button else { return }
+            button.title = "\(State.working.title) \(Int(elapsed))s"
+            button.needsDisplay = true
+            button.displayIfNeeded()
+        }
+
+        if mainThreadBlocked {
+            mutate()
+        } else {
+            DispatchQueue.main.async(execute: mutate)
+        }
     }
 
     private func stopElapsedCounter() {
+        counterLock.lock()
         counterTimer?.cancel()
         counterTimer = nil
-        counterLock.lock()
         workStartedAt = nil
         counterLock.unlock()
     }
