@@ -18,6 +18,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var alternateHotKeyRegistration: HotKeyRegistration = .registrationFailed(noErr)
     private var isBusy = false
 
+    /// Short on purpose. This fires on every successful fix, so at the error toast's five seconds
+    /// it would become noise the user learns to look past — which would cost the signal exactly
+    /// when it matters.
+    private static let successToastDuration: TimeInterval = 2
+
+    /// Bumped whenever the default preset changes, so a future change can notify again instead of
+    /// being permanently silenced by this one. A plain boolean would have been a one-shot.
+    private static let defaultPresetNoticeGeneration = 1
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // The one place the policy is set. LSUIElement in Info.plist covers the bundled app; this
         // covers a loose binary. Setting it in main.swift as well drifts the two out of sync.
@@ -49,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         promptForAccessibilityOnFirstLaunch()
+        announceDefaultPresetChangeIfNeeded()
     }
 
     /// macOS shows the "McGrammar would like to control this computer" dialog at most once per
@@ -78,6 +88,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ?? nil
         let stamp = modified.map { String(Int($0.timeIntervalSince1970)) } ?? "unknown"
         return "\(executable.path)@\(stamp)"
+    }
+
+    /// Tells an existing installation, once, that the gesture it has been using now does something
+    /// different — and how to get the old behaviour back.
+    ///
+    /// Only existing installations. A fresh install never had the old behaviour, so announcing a
+    /// change to it is noise; `hasPromptedForAccessibility` is the marker that a previous version
+    /// has run here. Fresh installs still get the generation recorded, so they are not told about
+    /// this change later.
+    ///
+    /// An alert rather than a toast, deliberately. The default of a destructive-by-nature gesture
+    /// changed: a toast at launch is missable, and a notice about a surprise that the user misses
+    /// is the surprise, not the notice. It carries the remedy, because announcing that something
+    /// someone relies on has moved without saying where it went converts a surprise into a
+    /// complaint.
+    private func announceDefaultPresetChangeIfNeeded() {
+        let key = "defaultPresetNoticeGeneration"
+        let defaults = UserDefaults.standard
+        let seen = defaults.integer(forKey: key)
+        guard seen < Self.defaultPresetNoticeGeneration else { return }
+        defaults.set(Self.defaultPresetNoticeGeneration, forKey: key)
+
+        let isExistingInstall = defaults.bool(forKey: "hasPromptedForAccessibility")
+        guard isExistingInstall else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "⌃⌥D now runs \(Preset.standard.displayName)"
+        alert.informativeText = """
+            McGrammar used to correct only grammar, spelling and punctuation. \
+            ⌃⌥D now also rewrites your selection to read more naturally, which means it can change \
+            wording you did not think was wrong.
+
+            To get the old behaviour, use ⌃⌥⇧D, or right-click → Services → \
+            "\(Preset.alternate.displayName) with McGrammar".
+            """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -260,13 +309,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
             switch result {
             case .success(let outcome):
-                let pastedChangeCount = TextCapture.paste(outcome.text)
+                let paste = TextCapture.paste(outcome.text)
                 StatusIcon.shared.setState(.idle)
+                // Report the paste, not the call. They are different moments: the CLI can return a
+                // clean result and the keystroke can still never be delivered, if the Accessibility
+                // grant was revoked while the fix was in flight. A toast saying "Polished" when
+                // nothing was replaced is worse than no toast at all, because this signal exists
+                // precisely so the user knows a rewrite happened to their text.
+                if paste.delivered {
+                    Toast.shared.show(preset.completionVerb, duration: Self.successToastDuration)
+                } else {
+                    StatusIcon.shared.flashError()
+                    Toast.shared.show(
+                        "McGrammar could not paste the result — check Accessibility permission. Your text was not changed.",
+                        isError: true,
+                        duration: 6
+                    )
+                }
                 // Stay busy until the clipboard is back to how the user left it. Releasing the
                 // guard at completion instead would let a second ⌃⌥D snapshot the correction that
                 // is still sitting on the pasteboard, and the original would be lost for good.
                 DispatchQueue.main.asyncAfter(deadline: .now() + TextCapture.clipboardRestoreDelay) {
-                    TextCapture.restore(snapshot, ifUnchangedSince: pastedChangeCount)
+                    TextCapture.restore(snapshot, ifUnchangedSince: paste.changeCount)
                     self.isBusy = false
                 }
             case .failure(let failure):

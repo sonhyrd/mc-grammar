@@ -30,10 +30,10 @@
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
-				<string>Proofread with McGrammar</string>
+				<string>Polish with McGrammar</string>
 			</dict>
 			<key>NSMessage</key>
-			<string>fixGrammar</string>
+			<string>polishText</string>
 			<key>NSPortName</key>
 			<string>McGrammar</string>
 			<key>NSSendTypes</key>
@@ -53,10 +53,10 @@
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
-				<string>Polish with McGrammar</string>
+				<string>Proofread with McGrammar</string>
 			</dict>
 			<key>NSMessage</key>
-			<string>polishText</string>
+			<string>fixGrammar</string>
 			<key>NSPortName</key>
 			<string>McGrammar</string>
 			<key>NSSendTypes</key>

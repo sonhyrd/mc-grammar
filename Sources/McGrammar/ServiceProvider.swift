@@ -11,6 +11,9 @@ final class ServiceProvider: NSObject {
     /// CRITICAL INVARIANT: this runs on the main thread and must call `fixSync` directly.
     /// Wrapping `fixAsync` in a semaphore here deadlocks — the completion dispatches to main,
     /// which this handler is blocking. Do not "improve" it that way.
+    /// Matches the hotkey path's success toast: short, because it fires on every fix.
+    static let successToastDuration: TimeInterval = 2
+
     /// Whether the provider actually implements the selector an `NSMessage` names.
     ///
     /// `NSMessage` is a string in Info.plist and nothing checks it at build time: a typo registers
@@ -73,6 +76,15 @@ final class ServiceProvider: NSObject {
             pasteboard.declareTypes([.string], owner: nil)
             pasteboard.setString(outcome.text, forType: .string)
             StatusIcon.shared.setState(.idle)
+            // Worded more weakly than the hotkey path's toast, and that difference is deliberate.
+            // There, the app posts the ⌘V itself and can say the paste was delivered. Here it
+            // writes to the return pasteboard and returns; macOS performs the replacement
+            // afterwards with no callback, so there is nothing to observe. Claiming the selection
+            // was replaced would be asserting something this path cannot know.
+            Toast.shared.show(
+                "\(preset.completionVerb) — returned to the app",
+                duration: ServiceProvider.successToastDuration
+            )
         case .failure(let failure):
             // Clear the return pasteboard explicitly. NSReturnTypes is declared, so leaving the
             // incoming text sitting there invites macOS to "replace" the selection with a plain

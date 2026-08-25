@@ -27,7 +27,7 @@ enum Preset: String, CaseIterable {
     /// rather than spread across five call sites. Whatever it is set to, the user must be told:
     /// under Polish they cannot see what was altered, so the toast naming the preset is the only
     /// signal a rewrite rather than a correction just happened to their text.
-    static let standard: Preset = .proofread
+    static let standard: Preset = .polish
 
     /// The preset the secondary gesture runs — always whichever one `standard` is not, so the pair
     /// cannot drift into both being the same thing.
@@ -52,6 +52,15 @@ enum Preset: String, CaseIterable {
         switch self {
         case .proofread: return "Proofread"
         case .polish: return "Polish"
+        }
+    }
+
+    /// What the toast says after a successful fix. Spelled out per case rather than derived: the
+    /// past tense of "proofread" is "proofread", so appending "ed" would produce "Proofreaded".
+    var completionVerb: String {
+        switch self {
+        case .proofread: return "Proofread"
+        case .polish: return "Polished"
         }
     }
 
