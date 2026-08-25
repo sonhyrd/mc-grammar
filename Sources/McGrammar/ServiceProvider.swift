@@ -23,7 +23,10 @@ final class ServiceProvider: NSObject {
             return
         }
 
-        StatusIcon.shared.setState(.working)
+        // mainThreadBlocked: true — this handler calls fixSync synchronously on the main thread
+        // right below, so the elapsed-counter timer is allowed to mutate the status button
+        // directly off-main. See the comment on StatusIcon.setState.
+        StatusIcon.shared.setState(.working, mainThreadBlocked: true)
         // Shorter timeout than the hotkey path: these seconds block the host application's main
         // thread, so a wedged fix should unfreeze it as fast as possible.
         let result = ClaudeRunner.shared.fixSync(text, timeout: ClaudeRunner.servicesTimeout)

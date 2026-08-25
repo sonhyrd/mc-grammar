@@ -133,7 +133,8 @@ final class ClaudeRunner {
     static let shared = ClaudeRunner()
 
     /// Default `fixSync` timeout for the hotkey path (and `--fix`/`--selftest`, which behave like
-    /// it). Sized for a sub-second baseline invocation: anything past this is a hung child, not a
+    /// it). Sized against a measured baseline of ~2.4–2.8s wall clock (see
+    /// docs/adr/0001-isolate-the-claude-code-invocation.md): well past that is a hung child, not a
     /// slow one. See `servicesTimeout` for the shorter bound used on the main-thread-blocking
     /// Services path.
     static let hotkeyTimeout: TimeInterval = 15
