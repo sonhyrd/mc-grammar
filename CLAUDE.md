@@ -57,15 +57,16 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 - `--setting-sources ""` and `--tools ""`, not `--settings <file>` — `--settings` *merges* into
   the user's resolved config rather than replacing it, so it cannot produce an isolated
   invocation. See the ADR's "Rejected alternatives."
-- **The correction rules live in `-p`, not `--system-prompt`, and that placement is an INVARIANT.**
-  `--system-prompt` is a one-line role only (`"You are a grammar corrector. Output only corrected
-  text."`). Moving the rules into `--system-prompt` reads tidier and measures identically on a
+- **A preset's rules live in `-p`, not `--system-prompt`, and that placement is an INVARIANT.**
+  `--system-prompt` carries a one-line role only, per preset (`Preset.role`). Moving the rules into
+  `--system-prompt` reads tidier and measures identically on a
   short input, but on a long multi-error paragraph it fails roughly half the time — 7/15 correct
   vs. 14/14 with the rules in `-p` — and the failures are silent: the user's text usually comes
   back unchanged, occasionally a list of corrections gets pasted over the selection instead of the
-  fix. See the ADR for the full finding. Any change to `ClaudeRunner.prompt` or
-  `ClaudeRunner.systemPrompt` must be verified with `--fixtures` before merging; `--selftest`'s one
-  easy sample would not have caught this.
+  fix. See the ADR for the full finding. Any change to `Preset.prompt` or `Preset.role` must be
+  verified with `--fixtures` before merging; `--selftest`'s one easy sample would not have caught
+  this. (ADR 0001 names these `ClaudeRunner.prompt` / `ClaudeRunner.systemPrompt`, which is where
+  they lived when it was written; the decision it records is unchanged.)
 - The user's selected text goes over **stdin**, written after the watchdog is armed — never
   interpolated into `-p`, the rest of the argument list, or a shell string.
 - `MAX_THINKING_TOKENS=0` in the child environment (undocumented CLI env var, not a flag — hence
@@ -161,7 +162,7 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 - `McGrammar --fix` — stdin → corrected text on stdout.
 - `McGrammar --fixtures` — the live accuracy suite (15 cases, ~40s, costs money, needs a login).
   Not part of `--selftest` or `swift test` because it isn't free to run on every build, but it is
-  mandatory after touching `ClaudeRunner.prompt`, `ClaudeRunner.systemPrompt`, or any invocation
+  mandatory after touching `Preset.prompt`, `Preset.role`, or any invocation
   flag — it is what caught the prompt-placement failure recorded in the ADR, and `--selftest`'s
   one easy sample would not have.
 - The Services path cannot be tested from `swift run`; it requires the .app bundle.

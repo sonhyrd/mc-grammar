@@ -13,7 +13,8 @@ if arguments.contains("--help") || arguments.contains("-h") {
         Usage:
           McGrammar              Launch the menu bar app (⌃⌥D, plus the Services menu item)
           McGrammar --selftest   Run headless checks: CLI discovery, permissions, a real fix
-          McGrammar --fix        Read text from stdin, print the corrected text
+          McGrammar --fix        Read text from stdin, write the corrected text.
+                                  Add --proofread (default) or --polish to choose a preset.
           McGrammar --fixtures   Run the live accuracy suite against the pinned model (costs
                                   money, needs a login; not part of --selftest or swift test)
           McGrammar --help       Show this message
@@ -26,7 +27,7 @@ if arguments.contains("--selftest") {
 }
 
 if arguments.contains("--fix") {
-    exit(CommandLineFix.run())
+    exit(CommandLineFix.run(preset: Preset.fromArguments(arguments, default: .proofread)))
 }
 
 if arguments.contains("--fixtures") {

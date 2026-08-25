@@ -150,27 +150,10 @@ final class ClaudeRunner {
     /// cost or behaviour change.
     static let model = "claude-haiku-4-5-20251001"
 
-    /// The single source of truth for the correction rules. Tuned and deliberately strict —
-    /// loosening this makes Claude rewrite instead of correct.
-    ///
-    /// These live in `-p`, NOT in `--system-prompt`, and that placement is load-bearing. Moving
-    /// them into the system prompt and reducing `-p` to a bare pointer reads tidier and measures
-    /// identically on a short input — but on a long, multi-error paragraph it fails roughly half
-    /// the time, usually by returning the user's text completely unchanged and occasionally by
-    /// emitting a list of corrections ("their → they're") that then gets pasted over the
-    /// selection. Measured on the hard fixture: 7/15 correct with the rules in `--system-prompt`,
-    /// 14/14 correct with them here. Do not "tidy" this back.
-    static let prompt = """
-        Fix the grammar, spelling, and punctuation of the text provided via stdin. \
-        Preserve the author's voice, tone, formatting, and line breaks. \
-        Do NOT rewrite or rephrase beyond what is needed for correctness. \
-        Output ONLY the corrected text. No preamble, no quotes, no explanations, no markdown fences.
-        """
+    /// The prompts moved to `Preset`. Their placement did not: the rules stay in `-p` and
+    /// `--system-prompt` stays a one-line role, for the measured reason recorded on `Preset.prompt`
+    /// and in docs/adr/0001-isolate-the-claude-code-invocation.md.
 
-    /// Replaces Claude Code's ~3,300-token agent preamble, which is all about git status, tool
-    /// discipline and output styles — none of it applicable here. Deliberately just a role line:
-    /// the rules belong in `prompt`, for the reason documented above.
-    static let systemPrompt = "You are a grammar corrector. Output only corrected text."
 
     /// Written by `resolveBinary()` on a background queue and read from the main thread (menu,
     /// self-test) and from `fixSync` on either. Every access goes through `lock` — an
@@ -322,7 +305,11 @@ final class ClaudeRunner {
     /// - Parameter timeout: how long to wait before the watchdog fires. Defaults to
     ///   `hotkeyTimeout`; the Services path passes `servicesTimeout` explicitly since it blocks
     ///   the host application's main thread.
-    func fixSync(_ text: String, timeout: TimeInterval = ClaudeRunner.hotkeyTimeout) -> Result<FixOutcome, FixError> {
+    func fixSync(
+        _ text: String,
+        preset: Preset = .proofread,
+        timeout: TimeInterval = ClaudeRunner.hotkeyTimeout
+    ) -> Result<FixOutcome, FixError> {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.emptyInput) }
 
@@ -343,13 +330,13 @@ final class ClaudeRunner {
         // Deliberately blinded, single-purpose invocation — see CLAUDE.md "Invocation". Every flag
         // here is load-bearing and was measured; do not drop one to "restore" the user's settings.
         process.arguments = [
-            "-p", Self.prompt,
+            "-p", preset.prompt,
             "--max-turns", "1",
             "--model", Self.model,
             "--setting-sources", "",
             "--tools", "",
             "--strict-mcp-config",
-            "--system-prompt", Self.systemPrompt,
+            "--system-prompt", preset.role,
             "--output-format", "json",
         ]
         process.environment = childEnvironment()
@@ -509,11 +496,12 @@ final class ClaudeRunner {
     /// Async wrapper for the hotkey path only: runs the sync core off-main, completes on main.
     func fixAsync(
         _ text: String,
+        preset: Preset = .proofread,
         timeout: TimeInterval = ClaudeRunner.hotkeyTimeout,
         completion: @escaping (Result<FixOutcome, FixError>) -> Void
     ) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = self.fixSync(text, timeout: timeout)
+            let result = self.fixSync(text, preset: preset, timeout: timeout)
             DispatchQueue.main.async { completion(result) }
         }
     }

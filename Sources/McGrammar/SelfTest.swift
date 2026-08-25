@@ -3,7 +3,12 @@ import AppKit
 /// Headless checks so the whole Claude bridge can be validated from a terminal, without the
 /// menu bar, Accessibility grants, or the Services cache being involved.
 enum SelfTest {
-    private static let sample = "this are a sentense with mistake, and it dont have good puncutation"
+    /// Proofread's sample: obvious surface errors, so a correct answer is unambiguous.
+    private static let proofreadSample = "this are a sentense with mistake, and it dont have good puncutation"
+    /// Polish's sample: deliberately grammatical. Nothing here is an *error*, which is the point —
+    /// a preset that only corrects would return this unchanged, and that is the regression this
+    /// round trip is here to notice.
+    private static let polishSample = "We would like to make a discussion about the problem which was happened in the last week."
 
     static func run() -> Int32 {
         var failures = 0
@@ -73,38 +78,8 @@ enum SelfTest {
             return 1
         }
 
-        print("·  Asking Claude to fix: \"\(sample)\"")
-        let started = Date()
-        let result = ClaudeRunner.shared.fixSync(sample)
-        let elapsed = Date().timeIntervalSince(started)
-
-        switch result {
-        case .success(let outcome):
-            print("✓  Round trip completed in \(String(format: "%.1f", elapsed))s (CLI reported \(outcome.durationMs)ms, model \(outcome.model), \(outcome.thinkingTokens) thinking tokens)")
-            print("   → \(outcome.text)")
-            if outcome.text == sample {
-                print("!  Output is identical to the input — check the prompt or the CLI version.")
-            }
-            if outcome.thinkingTokens == 0 {
-                print("✓  Extended thinking is off (0 thinking tokens).")
-            } else {
-                // A failure, not a warning. MAX_THINKING_TOKENS=0 is an environment variable, not a
-                // documented CLI flag, and it is the single largest latency lever we have — see
-                // docs/adr/0001-isolate-the-claude-code-invocation.md for the measured wall-clock
-                // figures (~2.25s with thinking off, floored by CLI process startup, not inference).
-                // The model was previously spending ~90% of its output budget reasoning about a
-                // six-word typo. A future CLI that silently ignores the variable would reintroduce
-                // that cost and latency with nothing else failing, so this tripwire exists
-                // specifically to catch that regression.
-                print("✗  Extended thinking is ON (\(outcome.thinkingTokens) thinking tokens).")
-                print("   MAX_THINKING_TOKENS=0 is being ignored by the installed CLI. Latency will")
-                print("   have roughly doubled as a result. Check the CLI version and the environment")
-                print("   passed to the child process.")
-                failures += 1
-            }
-        case .failure(let failure):
-            print("✗  Round trip failed: \(failure.description)")
-            failures += 1
+        for (preset, sample) in [(Preset.proofread, proofreadSample), (Preset.polish, polishSample)] {
+            failures += roundTrip(preset: preset, sample: sample)
         }
 
         // 6. Nothing should be left behind by the run that just happened.
@@ -184,5 +159,44 @@ enum SelfTest {
         ))
 
         return checks
+    }
+
+    /// One live fix per preset. Returns the number of failures it found.
+    private static func roundTrip(preset: Preset, sample: String) -> Int {
+        var failures = 0
+            print("·  \(preset.displayName): \"\(sample)\"")
+            let started = Date()
+            let result = ClaudeRunner.shared.fixSync(sample, preset: preset)
+            let elapsed = Date().timeIntervalSince(started)
+
+            switch result {
+            case .success(let outcome):
+                print("✓  \(preset.displayName) round trip completed in \(String(format: "%.1f", elapsed))s (CLI reported \(outcome.durationMs)ms, model \(outcome.model), \(outcome.thinkingTokens) thinking tokens)")
+                print("   → \(outcome.text)")
+                if outcome.text == sample {
+                    print("!  Output is identical to the input — check the prompt or the CLI version.")
+                }
+                if outcome.thinkingTokens == 0 {
+                    print("✓  Extended thinking is off (0 thinking tokens).")
+                } else {
+                    // A failure, not a warning. MAX_THINKING_TOKENS=0 is an environment variable, not a
+                    // documented CLI flag, and it is the single largest latency lever we have — see
+                    // docs/adr/0001-isolate-the-claude-code-invocation.md for the measured wall-clock
+                    // figures (~2.25s with thinking off, floored by CLI process startup, not inference).
+                    // The model was previously spending ~90% of its output budget reasoning about a
+                    // six-word typo. A future CLI that silently ignores the variable would reintroduce
+                    // that cost and latency with nothing else failing, so this tripwire exists
+                    // specifically to catch that regression.
+                    print("✗  Extended thinking is ON (\(outcome.thinkingTokens) thinking tokens).")
+                    print("   MAX_THINKING_TOKENS=0 is being ignored by the installed CLI. Latency will")
+                    print("   have roughly doubled as a result. Check the CLI version and the environment")
+                    print("   passed to the child process.")
+                    failures += 1
+                }
+            case .failure(let failure):
+                print("✗  Round trip failed: \(failure.description)")
+                failures += 1
+            }
+        return failures
     }
 }
