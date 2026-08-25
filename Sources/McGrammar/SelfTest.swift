@@ -55,6 +55,17 @@ enum SelfTest {
             print("·  Accessibility not granted for this process — the Services path still works.")
         }
 
+        // 5. Output shaping, proved without spawning the CLI. These assertions cost nothing, so
+        //    they run unconditionally — including when the CLI is missing entirely.
+        for check in whitespaceChecks() {
+            if check.passed {
+                print("\u{2713}  \(check.name)")
+            } else {
+                print("\u{2717}  \(check.name) — \(check.detail)")
+                failures += 1
+            }
+        }
+
         // 5. The real round trip.
         guard path != nil else {
             print(String(repeating: "─", count: 52))
@@ -117,5 +128,61 @@ enum SelfTest {
         }
         print("\(failures) check(s) failed.")
         return 1
+    }
+
+    private struct Check {
+        let name: String
+        let passed: Bool
+        let detail: String
+    }
+
+    /// Deterministic coverage for `ClaudeRunner.restoreOuterWhitespace`.
+    ///
+    /// The last case is the one that matters: a response of nothing but whitespace must fail as
+    /// empty output rather than being decorated with the selection's own whitespace and pasted
+    /// back as a success.
+    private static func whitespaceChecks() -> [Check] {
+        func shaped(_ original: String, _ raw: String, expect: String) -> Check {
+            let result = ClaudeRunner.restoreOuterWhitespace(from: original, onto: raw)
+            guard case .success(let value) = result else {
+                return Check(name: "", passed: false, detail: "expected success, got a failure")
+            }
+            return Check(name: "", passed: value == expect, detail: "got \(String(reflecting: value))")
+        }
+        func named(_ name: String, _ check: Check) -> Check {
+            Check(name: name, passed: check.passed, detail: check.detail)
+        }
+
+        var checks: [Check] = []
+
+        checks.append(named(
+            "A trailing newline in the selection survives the round trip",
+            shaped("Fix this.\n", "Fixed this.", expect: "Fixed this.\n")
+        ))
+        checks.append(named(
+            "Leading indentation is taken from the selection, not the model",
+            shaped("    indented line", "  indented line  ", expect: "    indented line")
+        ))
+        checks.append(named(
+            "Leading and trailing whitespace are both restored",
+            shaped("\n\n  padded  \n\n", "padded", expect: "\n\n  padded  \n\n")
+        ))
+        checks.append(named(
+            "A selection with no outer whitespace gains none",
+            shaped("no padding", "no padding", expect: "no padding")
+        ))
+
+        var blankRejected = false
+        if case .failure(let error) = ClaudeRunner.restoreOuterWhitespace(from: "Fix this.\n", onto: "   \n\t  \n "),
+           case .emptyOutput = error {
+            blankRejected = true
+        }
+        checks.append(Check(
+            name: "A whitespace-only response fails as empty output, before whitespace is restored",
+            passed: blankRejected,
+            detail: blankRejected ? "" : "it was NOT rejected — it would be pasted over the selection"
+        ))
+
+        return checks
     }
 }

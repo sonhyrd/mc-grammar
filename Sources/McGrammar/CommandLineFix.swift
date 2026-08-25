@@ -9,7 +9,11 @@ enum CommandLineFix {
         let input = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? ""
         switch ClaudeRunner.shared.fixSync(input) {
         case .success(let outcome):
-            print(outcome.text)
+            // Written, not printed. The corrected text now carries the input's own trailing
+            // whitespace, so `print` would append a second newline and this filter would stop
+            // being byte-faithful — which is the whole point of a stdin→stdout filter you can
+            // diff against.
+            FileHandle.standardOutput.write(Data(outcome.text.utf8))
             return 0
         case .failure(let failure):
             FileHandle.standardError.write(Data("McGrammar: \(failure.description)\n".utf8))

@@ -458,15 +458,52 @@ final class ClaudeRunner {
         guard let model = response.canonicalModel else {
             return .failure(.malformedResponse(raw.trimmingCharacters(in: .whitespacesAndNewlines)))
         }
-        let text = response.result.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return .failure(.emptyOutput) }
+        let corrected: String
+        switch Self.restoreOuterWhitespace(from: text, onto: response.result) {
+        case .success(let value): corrected = value
+        case .failure(let error): return .failure(error)
+        }
 
         return .success(FixOutcome(
-            text: text,
+            text: corrected,
             model: model,
             thinkingTokens: response.usage.outputTokensDetails?.thinkingTokens ?? 0,
             durationMs: response.durationMs
         ))
+    }
+
+    // MARK: - Output shaping
+
+    /// Puts the selection's own leading and trailing whitespace back onto the model's answer.
+    ///
+    /// The model is told to reproduce the input's structure, but its answer still arrives with
+    /// whatever incidental whitespace it chose, and the envelope's `result` cannot be trusted to
+    /// have preserved a trailing newline. So the outer whitespace is not negotiated with the
+    /// model at all: it is stripped from the answer and taken verbatim from the input. On the
+    /// Services path the selection boundary is exactly what macOS replaces, so a swallowed
+    /// trailing newline visibly welds two paragraphs together.
+    ///
+    /// ORDERING IS LOAD-BEARING: the empty check runs on the model's own content, BEFORE the
+    /// captured whitespace goes back on. Re-applying first and testing after would turn a
+    /// whitespace-only answer into a non-empty string and paste it over the user's selection as a
+    /// success — the same "a truncated answer must never read as success" failure the watchdog
+    /// exists to prevent, arriving through a different door.
+    ///
+    /// Pure and `internal` on purpose: this is the one piece of shaping logic that can be proved
+    /// without spawning the CLI, and `--selftest` proves it on every run for free.
+    static func restoreOuterWhitespace(from original: String, onto raw: String) -> Result<String, FixError> {
+        let core = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !core.isEmpty else { return .failure(.emptyOutput) }
+
+        // An all-whitespace original would have leading and trailing overlap and double up. Callers
+        // are guarded by `.emptyInput`, but this function is reachable from tests and must not
+        // depend on a caller's guard for its own correctness.
+        guard original.contains(where: { !$0.isWhitespace }) else { return .success(core) }
+
+        let leading = String(original.prefix(while: { $0.isWhitespace }))
+        // No `suffix(while:)` on String — walk the reversed view and flip the result back.
+        let trailing = String(original.reversed().prefix(while: { $0.isWhitespace }).reversed())
+        return .success(leading + core + trailing)
     }
 
     /// Async wrapper for the hotkey path only: runs the sync core off-main, completes on main.
