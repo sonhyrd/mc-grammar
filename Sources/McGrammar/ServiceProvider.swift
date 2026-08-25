@@ -27,11 +27,11 @@ final class ServiceProvider: NSObject {
         let result = ClaudeRunner.shared.fixSync(text)
 
         switch result {
-        case .success(let corrected):
+        case .success(let outcome):
             // declareTypes clears the pasteboard and re-declares in one step; macOS reads the
             // string back out of this same pasteboard to replace the user's selection.
             pasteboard.declareTypes([.string], owner: nil)
-            pasteboard.setString(corrected, forType: .string)
+            pasteboard.setString(outcome.text, forType: .string)
             StatusIcon.shared.setState(.idle)
         case .failure(let failure):
             // Clear the return pasteboard explicitly. NSReturnTypes is declared, so leaving the

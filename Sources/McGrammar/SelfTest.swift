@@ -68,14 +68,14 @@ enum SelfTest {
         let elapsed = Date().timeIntervalSince(started)
 
         switch result {
-        case .success(let corrected):
-            print("✓  Round trip completed in \(String(format: "%.1f", elapsed))s")
-            print("   → \(corrected)")
-            if corrected == sample {
+        case .success(let outcome):
+            print("✓  Round trip completed in \(String(format: "%.1f", elapsed))s (CLI reported \(outcome.durationMs)ms, model \(outcome.model), \(outcome.thinkingTokens) thinking tokens)")
+            print("   → \(outcome.text)")
+            if outcome.text == sample {
                 print("!  Output is identical to the input — check the prompt or the CLI version.")
             }
-            if corrected.lowercased().contains("here is") || corrected.contains("```") {
-                print("!  Output looks like it contains preamble. Consider --output-format json.")
+            if outcome.text.lowercased().contains("here is") || outcome.text.contains("```") {
+                print("!  Output looks like it contains preamble.")
             }
         case .failure(let failure):
             print("✗  Round trip failed: \(failure.description)")

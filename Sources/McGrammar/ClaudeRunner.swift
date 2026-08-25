@@ -1,6 +1,17 @@
 import Darwin
 import Foundation
 
+/// Everything `fixSync` learned about a successful run, decoded once from `--output-format json`
+/// and carried back through the seam rather than discarded. `model` and `thinkingTokens` in
+/// particular report what the CLI says actually happened, not what was requested — see the
+/// decoding note on `ClaudeJSONResponse`.
+struct FixOutcome {
+    let text: String
+    let model: String
+    let thinkingTokens: Int
+    let durationMs: Int
+}
+
 /// Errors surfaced by the Claude Code bridge. Every case is user-presentable.
 enum FixError: Error, CustomStringConvertible {
     case claudeNotFound
@@ -10,6 +21,14 @@ enum FixError: Error, CustomStringConvertible {
     case exited(code: Int32, stderr: String)
     case emptyOutput
     case workspaceUnavailable
+    /// stdout did not contain a parseable `--output-format json` envelope — a CLI version skew,
+    /// or something else writing to stdout ahead of the JSON. Distinct from `.exited` because the
+    /// process itself reported success (exit code 0); it is the payload we could not trust.
+    case malformedResponse(String)
+    /// The JSON parsed cleanly and the process exited 0, but the envelope's own `is_error` field
+    /// says the run did not succeed (e.g. it hit `--max-turns 1` without finishing). Exit code
+    /// alone would have called this a success and pasted `result` over the user's selection.
+    case claudeReportedError(String)
 
     var description: String {
         switch self {
@@ -31,7 +50,63 @@ enum FixError: Error, CustomStringConvertible {
             return "Could not create McGrammar's private CLI workspace, so the transcript the CLI "
                 + "writes could not be cleaned up afterwards. Check free space and permissions on "
                 + "~/Library/Application Support."
+        case .malformedResponse(let raw):
+            let clipped = raw.count > 300 ? String(raw.prefix(300)) + "…" : raw
+            return "Claude's response could not be parsed as JSON: \(clipped)"
+        case .claudeReportedError(let message):
+            let clipped = message.count > 300 ? String(message.prefix(300)) + "…" : message
+            return clipped.isEmpty ? "Claude reported an error." : "Claude reported an error: \(clipped)"
         }
+    }
+}
+
+/// Decodes the `--output-format json` envelope. Field casing is exactly what the CLI emits —
+/// mostly snake_case, except `modelUsage` and its contents, which are already camelCase — so this
+/// spells out `CodingKeys` per level instead of a blanket `keyDecodingStrategy`.
+///
+/// `model` is deliberately NOT read from the invocation's `--model` flag: `modelUsage` reports
+/// what the CLI actually billed and ran, which is the whole point of widening this seam. With
+/// `--max-turns 1` there is exactly one entry; if a future CLI version ever reports more, the
+/// first one found is used rather than failing the whole fix over a reporting nuance.
+private struct ClaudeJSONResponse: Decodable {
+    let isError: Bool
+    let result: String
+    let durationMs: Int
+    let usage: Usage
+    let modelUsage: [String: ModelUsageEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case isError = "is_error"
+        case result
+        case durationMs = "duration_ms"
+        case usage
+        case modelUsage
+    }
+
+    struct Usage: Decodable {
+        let outputTokensDetails: OutputTokensDetails?
+
+        enum CodingKeys: String, CodingKey {
+            case outputTokensDetails = "output_tokens_details"
+        }
+
+        struct OutputTokensDetails: Decodable {
+            let thinkingTokens: Int
+
+            enum CodingKeys: String, CodingKey {
+                case thinkingTokens = "thinking_tokens"
+            }
+        }
+    }
+
+    struct ModelUsageEntry: Decodable {
+        let canonicalModel: String
+    }
+
+    /// First entry in `modelUsage`, or `nil` if the CLI reported none — that shape is itself a
+    /// malformed response, not a model to guess at.
+    var canonicalModel: String? {
+        modelUsage.values.first?.canonicalModel
     }
 }
 
@@ -213,7 +288,7 @@ final class ClaudeRunner {
     /// CRITICAL INVARIANT: the NSServices handler must call this directly. Never wrap `fixAsync`
     /// in a semaphore from the services handler — that handler runs on the main thread and the
     /// async completion dispatches back to main, which deadlocks with certainty.
-    func fixSync(_ text: String) -> Result<String, FixError> {
+    func fixSync(_ text: String) -> Result<FixOutcome, FixError> {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.emptyInput) }
 
@@ -241,6 +316,7 @@ final class ClaudeRunner {
             "--tools", "",
             "--strict-mcp-config",
             "--system-prompt", Self.systemPrompt,
+            "--output-format", "json",
         ]
         process.environment = childEnvironment()
         process.currentDirectoryURL = workspace
@@ -324,43 +400,60 @@ final class ClaudeRunner {
         if watch.tripped {
             return .failure(.timedOut(seconds: Int(Self.timeout)))
         }
+        // Exit code is authoritative for whether the process itself completed normally — it is
+        // guaranteed by the OS even if stdout is truncated, empty, or not JSON at all, so it is
+        // checked first and short-circuits straight to `.exited` without attempting to parse
+        // anything. `is_error` below is a second, independent signal that only means something
+        // once we already trust the JSON: the CLI can exit 0 (a clean process exit) while its own
+        // envelope reports a logical failure, e.g. hitting `--max-turns 1` without finishing.
         guard process.terminationStatus == 0 else {
             let stderr = String(data: stderrData, encoding: .utf8) ?? ""
             return .failure(.exited(code: process.terminationStatus, stderr: stderr))
         }
 
         let raw = String(data: stdoutData, encoding: .utf8) ?? ""
-        let cleaned = Self.sanitize(raw)
-        guard !cleaned.isEmpty else { return .failure(.emptyOutput) }
-        return .success(cleaned)
+        guard let response = Self.parseResponse(raw) else {
+            return .failure(.malformedResponse(raw.trimmingCharacters(in: .whitespacesAndNewlines)))
+        }
+        if response.isError {
+            return .failure(.claudeReportedError(response.result))
+        }
+        guard let model = response.canonicalModel else {
+            return .failure(.malformedResponse(raw.trimmingCharacters(in: .whitespacesAndNewlines)))
+        }
+        let text = response.result.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return .failure(.emptyOutput) }
+
+        return .success(FixOutcome(
+            text: text,
+            model: model,
+            thinkingTokens: response.usage.outputTokensDetails?.thinkingTokens ?? 0,
+            durationMs: response.durationMs
+        ))
     }
 
     /// Async wrapper for the hotkey path only: runs the sync core off-main, completes on main.
-    func fixAsync(_ text: String, completion: @escaping (Result<String, FixError>) -> Void) {
+    func fixAsync(_ text: String, completion: @escaping (Result<FixOutcome, FixError>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             let result = self.fixSync(text)
             DispatchQueue.main.async { completion(result) }
         }
     }
 
-    // MARK: - Output hygiene
+    // MARK: - Response parsing
 
-    /// Trims and strips the occasional markdown fence. If preamble ever leaks through, switch the
-    /// invocation to `--output-format json` and read the `result` field instead of over-tuning the prompt.
-    static func sanitize(_ raw: String) -> String {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text.hasPrefix("```") else { return text }
-
-        // Both fences or neither. Stripping on the opening alone silently ate the first line of
-        // any output that merely started with a fence — an unterminated block from the CLI, or a
-        // user correcting a Markdown snippet whose own first line is ```.
-        var lines = text.components(separatedBy: "\n")
-        guard lines.count >= 2,
-              let last = lines.last,
-              last.trimmingCharacters(in: .whitespaces).hasPrefix("```") else { return text }
-        lines.removeFirst()
-        lines.removeLast()
-        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Decodes the `--output-format json` envelope from raw stdout. Stdout is expected to be
+    /// nothing but that one JSON object, but this is defensive about it not being the only thing
+    /// there: it locates the outermost `{...}` span and decodes that, rather than requiring the
+    /// whole buffer to be valid JSON on the nose. Returns `nil` for anything that does not decode
+    /// — callers turn that into `.malformedResponse`, never a guess at the text.
+    private static func parseResponse(_ raw: String) -> ClaudeJSONResponse? {
+        guard let firstBrace = raw.firstIndex(of: "{"),
+              let lastBrace = raw.lastIndex(of: "}"),
+              firstBrace <= lastBrace else { return nil }
+        let jsonSlice = raw[firstBrace...lastBrace]
+        guard let data = jsonSlice.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(ClaudeJSONResponse.self, from: data)
     }
 }
 
