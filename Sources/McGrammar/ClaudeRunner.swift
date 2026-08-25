@@ -19,6 +19,14 @@ enum FixError: Error, CustomStringConvertible {
     case timedOut(seconds: Int)
     case launchFailed(String)
     case exited(code: Int32, stderr: String)
+    /// The installed CLI rejected the invocation outright — stderr matched a pattern for an
+    /// unrecognized flag or an unrecognized/deprecated model identifier. Distinct from `.exited`
+    /// so the user gets an action to take instead of a raw CLI error string. Two real causes
+    /// produce this, and the message must stay honest about both: an old CLI that predates
+    /// `--setting-sources`/`--tools`/`--system-prompt`/`--strict-mcp-config`, or a pinned model
+    /// identifier that has since aged out. `claude update` is the fix for the first and, once a
+    /// newer McGrammar ships a fresh pin, effectively the fix for the second too.
+    case rejectedInvocation(String)
     case emptyOutput
     case workspaceUnavailable
     /// stdout did not contain a parseable `--output-format json` envelope — a CLI version skew,
@@ -44,6 +52,11 @@ enum FixError: Error, CustomStringConvertible {
             let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             let clipped = detail.count > 300 ? String(detail.prefix(300)) + "…" : detail
             return clipped.isEmpty ? "claude exited with code \(code)." : "claude exited with code \(code): \(clipped)"
+        case .rejectedInvocation(let stderr):
+            let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let clipped = detail.count > 300 ? String(detail.prefix(300)) + "…" : detail
+            return "Your Claude CLI rejected McGrammar's invocation — try `claude update`."
+                + (clipped.isEmpty ? "" : " (\(clipped))")
         case .emptyOutput:
             return "Claude returned an empty result."
         case .workspaceUnavailable:
@@ -408,6 +421,9 @@ final class ClaudeRunner {
         // envelope reports a logical failure, e.g. hitting `--max-turns 1` without finishing.
         guard process.terminationStatus == 0 else {
             let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+            if Self.looksLikeRejectedInvocation(stderr) {
+                return .failure(.rejectedInvocation(stderr))
+            }
             return .failure(.exited(code: process.terminationStatus, stderr: stderr))
         }
 
@@ -438,6 +454,31 @@ final class ClaudeRunner {
             let result = self.fixSync(text)
             DispatchQueue.main.async { completion(result) }
         }
+    }
+
+    /// Stderr substrings that indicate the CLI rejected the invocation itself, rather than the
+    /// model failing to produce a result. Deliberately no capability probe and no graceful
+    /// degradation here — see the ticket for why both were rejected. This is intentionally a
+    /// pattern match against known CLI error phrasing (commander-style "unknown option", and the
+    /// enum-style rejection an invalid `--model` value produces), not an attempt to parse every
+    /// possible CLI failure; anything that does not match falls through to the generic `.exited`
+    /// case with the raw stderr still visible to the user.
+    private static let rejectedInvocationPatterns = [
+        "unknown option",
+        "unrecognized option",
+        "unrecognized arguments",
+        "unknown arguments",
+        "not a valid choice",
+        "invalid model",
+        "unrecognized model",
+        "unknown model",
+        "model not found",
+        "no such model",
+    ]
+
+    private static func looksLikeRejectedInvocation(_ stderr: String) -> Bool {
+        let lowered = stderr.lowercased()
+        return rejectedInvocationPatterns.contains { lowered.contains($0) }
     }
 
     // MARK: - Response parsing
