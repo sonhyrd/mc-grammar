@@ -24,11 +24,11 @@ if arguments.contains("--selftest") {
 }
 
 if arguments.contains("--fix") {
-    exit(SelfTest.fixStdin())
+    exit(CommandLineFix.run())
 }
 
 let application = NSApplication.shared
 let delegate = AppDelegate()
 application.delegate = delegate
-application.setActivationPolicy(.accessory)
+// The activation policy is set once, in AppDelegate.applicationDidFinishLaunching.
 application.run()

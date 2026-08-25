@@ -56,10 +56,25 @@ final class ClaudeRunner {
         Output ONLY the corrected text. No preamble, no quotes, no explanations, no markdown fences.
         """
 
-    private(set) var binaryPath: String?
-    private(set) var resolutionDetail: String = "Not detected yet"
+    /// Written by `resolveBinary()` on a background queue and read from the main thread (menu,
+    /// self-test) and from `fixSync` on either. Every access goes through `lock` — an
+    /// unsynchronised read of a `String?` is not merely stale, it can tear the reference.
+    private var _binaryPath: String?
+    private var _resolutionDetail: String = "Not detected yet"
 
     private let lock = NSLock()
+
+    var binaryPath: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _binaryPath
+    }
+
+    var resolutionDetail: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return _resolutionDetail
+    }
 
     /// Common install locations, prepended to the child PATH. GUI-launched apps do not inherit the
     /// terminal PATH — this plus the login-shell lookup is the fix for the #1 silent failure mode.
@@ -105,8 +120,8 @@ final class ClaudeRunner {
 
     private func store(path: String?, detail: String) {
         lock.lock()
-        binaryPath = path
-        resolutionDetail = detail
+        _binaryPath = path
+        _resolutionDetail = detail
         lock.unlock()
     }
 
@@ -117,7 +132,17 @@ final class ClaudeRunner {
         return exists && !isDirectory.boolValue && FileManager.default.isExecutableFile(atPath: path)
     }
 
-    private func runCapturing(_ launchPath: String, _ arguments: [String]) -> String? {
+    /// Grace for the login-shell lookup. A zsh **login** shell sources the user's whole profile,
+    /// so a version manager that phones home, a hung completion init, or an interactive `read` in
+    /// `.zprofile` can block indefinitely. This call is reached from `fixSync` — on the main thread
+    /// via the Services path — long before the 60s watchdog is armed, so it needs its own bound.
+    static let discoveryTimeout: TimeInterval = 10
+
+    private func runCapturing(
+        _ launchPath: String,
+        _ arguments: [String],
+        timeout: TimeInterval = ClaudeRunner.discoveryTimeout
+    ) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launchPath)
         process.arguments = arguments
@@ -127,9 +152,27 @@ final class ClaudeRunner {
         do {
             try process.run()
         } catch {
+            // No spawn, so nothing will close the write end for us; the drain below would block
+            // on read() forever. Same reasoning as the launch-failure path in fixSync.
+            try? pipe.fileHandleForWriting.close()
             return nil
         }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+
+        var data = Data()
+        let group = DispatchGroup()
+        DispatchQueue.global(qos: .userInitiated).async(group: group) {
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
+        }
+
+        if group.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()
+            if group.wait(timeout: .now() + Self.killGrace) == .timedOut, process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+            group.wait()
+            return nil
+        }
+
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
         return String(data: data, encoding: .utf8)
@@ -207,6 +250,31 @@ final class ClaudeRunner {
             return .failure(.launchFailed(error.localizedDescription))
         }
 
+        // Arm the watchdog BEFORE writing stdin. `write(contentsOf:)` on a pipe blocks once the
+        // kernel buffer (16–64 KB) fills, so a large selection handed to a child that stalls
+        // before draining would wedge fixSync — on the main thread, via the Services path — with
+        // no timer yet running to break it.
+        let watch = ProcessWatch()
+        let killer = DispatchWorkItem { [weak process] in
+            guard let process, process.isRunning else { return }
+            watch.trip()
+            process.terminate()
+        }
+        // SIGTERM is a request. If the child is wedged and ignores it, escalate — otherwise
+        // waitUntilExit below never returns and the fix never completes.
+        let hardKiller = DispatchWorkItem { [weak process] in
+            guard let process else { return }
+            let pid = process.processIdentifier
+            // Checked and signalled atomically against `finish()`: `cancel()` cannot stop a work
+            // item that has already started, so without the lock the child could be reaped — and
+            // its PID recycled — between the liveness check and the kill, sending SIGKILL to an
+            // unrelated process on the user's machine.
+            watch.escalate { if process.isRunning { kill(pid, SIGKILL) } }
+        }
+        let queue = DispatchQueue.global(qos: .utility)
+        queue.asyncAfter(deadline: .now() + Self.timeout, execute: killer)
+        queue.asyncAfter(deadline: .now() + Self.timeout + Self.killGrace, execute: hardKiller)
+
         // The selected text goes in over stdin — never interpolated into the argument list, so
         // quotes, backticks and newlines in the user's text cannot be misread as shell syntax.
         // The throwing variant matters: if claude dies before reading, the plain `write` would
@@ -214,23 +282,8 @@ final class ClaudeRunner {
         try? stdinPipe.fileHandleForWriting.write(contentsOf: Data(text.utf8))
         try? stdinPipe.fileHandleForWriting.close()
 
-        let watchdog = Watchdog()
-        let killer = DispatchWorkItem { [weak process] in
-            guard let process, process.isRunning else { return }
-            watchdog.trip()
-            process.terminate()
-        }
-        // SIGTERM is a request. If the child is wedged and ignores it, escalate — otherwise
-        // waitUntilExit below never returns and the fix never completes.
-        let hardKiller = DispatchWorkItem { [weak process] in
-            guard let process, process.isRunning, watchdog.tripped else { return }
-            kill(process.processIdentifier, SIGKILL)
-        }
-        let queue = DispatchQueue.global(qos: .utility)
-        queue.asyncAfter(deadline: .now() + Self.timeout, execute: killer)
-        queue.asyncAfter(deadline: .now() + Self.timeout + Self.killGrace, execute: hardKiller)
-
         process.waitUntilExit()
+        watch.finish()
         killer.cancel()
         hardKiller.cancel()
         group.wait()
@@ -242,7 +295,7 @@ final class ClaudeRunner {
         // success, and that truncated text gets pasted over the user's selection. Fail closed. The
         // cost is a rare, honest "took longer than 60s" on a fix that finished within a hair of the
         // deadline; the alternative is silently corrupting the text we were asked to correct.
-        if watchdog.tripped {
+        if watch.tripped {
             return .failure(.timedOut(seconds: Int(Self.timeout)))
         }
         guard process.terminationStatus == 0 else {
@@ -269,33 +322,53 @@ final class ClaudeRunner {
     /// Trims and strips the occasional markdown fence. If preamble ever leaks through, switch the
     /// invocation to `--output-format json` and read the `result` field instead of over-tuning the prompt.
     static func sanitize(_ raw: String) -> String {
-        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.hasPrefix("```") else { return text }
 
+        // Both fences or neither. Stripping on the opening alone silently ate the first line of
+        // any output that merely started with a fence — an unterminated block from the CLI, or a
+        // user correcting a Markdown snippet whose own first line is ```.
         var lines = text.components(separatedBy: "\n")
+        guard lines.count >= 2,
+              let last = lines.last,
+              last.trimmingCharacters(in: .whitespaces).hasPrefix("```") else { return text }
         lines.removeFirst()
-        if let last = lines.last, last.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
-            lines.removeLast()
-        }
-        text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return text
+        lines.removeLast()
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
-/// One-bit, thread-safe flag shared between the watchdog and the waiting thread.
-private final class Watchdog {
+/// Thread-safe state shared between the two watchdog timers and the thread waiting on the child.
+private final class ProcessWatch {
     private let lock = NSLock()
-    private var value = false
+    private var timedOut = false
+    private var finished = false
 
     var tripped: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return value
+        return timedOut
     }
 
     func trip() {
         lock.lock()
-        value = true
+        timedOut = true
         lock.unlock()
+    }
+
+    /// Marks the child as waited-for. After this, `escalate` can never fire.
+    func finish() {
+        lock.lock()
+        finished = true
+        lock.unlock()
+    }
+
+    /// Runs `signal` only while the child is still ours to signal, holding the lock across the
+    /// call so the decision cannot race `finish()`.
+    func escalate(_ signal: () -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard timedOut, !finished else { return }
+        signal()
     }
 }

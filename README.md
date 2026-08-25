@@ -57,7 +57,8 @@ fine; the Services menu path works without it.
 press ⌃⌥D. A few seconds later it is replaced.
 
 The menu bar shows `✒︎` when idle, `⋯` while Claude is working, `✒︎!` briefly on an error. Click it
-for the resolved `claude` path, the Accessibility state, and Quit.
+for **Fix Selected Text** (⌃⌥D), the resolved `claude` path, **Re-detect Claude CLI**, the
+Accessibility state, **Open Services Settings…**, and Quit.
 
 ### Updating
 
@@ -117,8 +118,9 @@ the pane whenever you want it.
 
 To grant it by hand: System Settings → Privacy & Security → Accessibility → enable **McGrammar**.
 
-macOS shows that dialog at most once per app identity, so if you have dismissed it before you
-will only get the settings pane, not a new prompt.
+McGrammar asks once per installed build — reinstalling re-arms the prompt. macOS itself, though,
+shows its dialog at most once per app identity, so if you have dismissed it before you may only
+get the settings pane rather than a new prompt.
 
 The grant attaches to the *launching* process. If you run the binary straight from a terminal,
 macOS asks Terminal for the permission, not McGrammar — always test the hotkey from
@@ -185,6 +187,12 @@ Your text goes to exactly one place: the `claude` process on your machine. McGra
 logs, keeps no history, and persists nothing of its own to disk. The clipboard is snapshotted in
 memory only long enough to restore it after a paste.
 
+One limit of that restore, stated plainly: *promised* clipboard flavours cannot be put back. Some
+apps advertise a type on the pasteboard and only render it when a receiver asks — file promises,
+certain app-private formats. There is nothing for a snapshot to copy, so those flavours are lost
+when the hotkey path restores your clipboard. Ordinary text, RTF, HTML and images round-trip
+intact, in their original preference order. The Services path never touches your clipboard at all.
+
 One caveat worth stating plainly, because it is not McGrammar's code: the Claude Code CLI keeps a
 session transcript of each `claude -p` run — including the text it corrected — under
 `~/.claude/projects/<slug of the working directory>/`. Left alone those accumulate, one per fix.
@@ -235,7 +243,7 @@ scripts/local-test.sh     pre-flight verification
 CLAUDE.md                 invariants for Claude Code sessions in this repo
 HANDOFF.md                original product/research brief
 Sources/McGrammar/
-  main.swift              entry point, --selftest / --fix CLI modes
+  main.swift              entry point, --selftest / --fix / --help CLI modes
   AppDelegate.swift       menu bar, menu state, hotkey path
   ClaudeRunner.swift      the Claude Code bridge (fixSync core + fixAsync wrapper)
   ServiceProvider.swift   NSServices handler
@@ -245,6 +253,7 @@ Sources/McGrammar/
   Toast.swift             permission-free HUD notifications
   Transcripts.swift       isolates and deletes the CLI's session transcripts
   SelfTest.swift          headless checks
+  CommandLineFix.swift    the --fix stdin filter
 ```
 
 ## Roadmap

@@ -50,8 +50,14 @@ else
 fi
 
 step "4. Terminal round trip through claude -p"
+# Run from McGrammar's own marked workspace, exactly as the app does. Run from the repo instead
+# and the CLI writes a transcript of this text into ~/.claude/projects/<repo-slug>/ — an unmarked
+# folder that both Transcripts.purge and the step 8 check below ignore by design, so the test
+# script would silently break the project's own "leaves the machine as it found it" invariant.
+CLI_WORKSPACE="$HOME/Library/Application Support/McGrammar/cli-workspace"
+mkdir -p "$CLI_WORKSPACE"
 if [ -n "$CLAUDE_BIN" ]; then
-  OUT="$(echo "helo wrold, this are a test" | "$CLAUDE_BIN" -p "Fix grammar. Output only the corrected text." --max-turns 1 2>"$TMP_DIR/claude-err")"
+  OUT="$(cd "$CLI_WORKSPACE" && echo "helo wrold, this are a test" | "$CLAUDE_BIN" -p "Fix grammar. Output only the corrected text." --max-turns 1 2>"$TMP_DIR/claude-err")"
   if [ -n "$OUT" ]; then
     pass "claude answered: $OUT"
   else
@@ -85,6 +91,14 @@ plutil -extract NSServices.0.NSReturnTypes.0 raw Info.plist >/dev/null 2>&1 \
 [ "$(plutil -extract LSUIElement raw Info.plist 2>/dev/null)" = "true" ] \
   && pass "LSUIElement=true (menu bar only, no Dock icon)" \
   || fail "LSUIElement is not true"
+# The default Services timeout is far too short for Claude Code spin-up; 120000ms is a hard
+# requirement, not a preference. Unchecked, a regression here reads as "the Service does nothing".
+[ "$(plutil -extract NSServices.0.NSTimeout raw Info.plist 2>/dev/null)" = "120000" ] \
+  && pass "NSTimeout=120000 (long enough for Claude Code spin-up)" \
+  || fail "NSServices.0.NSTimeout is not 120000"
+[ "$(plutil -extract NSServices.0.NSSendTypes.0 raw Info.plist 2>/dev/null)" = "NSStringPboardType" ] \
+  && pass "NSSendTypes declares NSStringPboardType" \
+  || fail "NSSendTypes.0 is not NSStringPboardType"
 
 step "7. App self-test (real Claude round trip)"
 if [ -x "$BIN" ]; then
@@ -100,8 +114,9 @@ LEFTOVER=$(find "$HOME/.claude/projects" -maxdepth 2 -type d -name '*McGrammar-c
 if [ "${LEFTOVER:-0}" = "0" ]; then
   pass "No Claude CLI transcripts left in McGrammar's workspace"
 else
-  note "$LEFTOVER transcript(s) left under ~/.claude/projects for McGrammar's workspace"
-  note "Expected 0 — the app purges them after each fix. Report this if it persists."
+  fail "$LEFTOVER transcript(s) left under ~/.claude/projects for McGrammar's workspace"
+  note "Expected 0 — the app purges them after each fix. README documents this as a guarantee,"
+  note "so it fails the run rather than merely warning."
 fi
 [ -d "$WORKSPACE" ] && pass "CLI workspace is a directory McGrammar owns: $WORKSPACE" \
   || note "CLI workspace not created yet (no fix has run from the app)"

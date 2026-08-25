@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var isBusy = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The one place the policy is set. LSUIElement in Info.plist covers the bundled app; this
+        // covers a loose binary. Setting it in main.swift as well drifts the two out of sync.
         NSApp.setActivationPolicy(.accessory)
 
         buildMenu()
@@ -21,7 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSUpdateDynamicServices()
 
         hotKeyRegistered = hotKey.register { [weak self] in
-            self?.fixSelectionViaHotKey()
+            self?.fixSelection()
         }
 
         DispatchQueue.global(qos: .utility).async {
@@ -38,14 +40,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// leaving the user to discover the menu item. The Services path never needs this, which is
     /// why a decline is silent: the app stays fully usable.
     private func promptForAccessibilityOnFirstLaunch() {
-        let key = "hasPromptedForAccessibility"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-        guard !TextCapture.hasAccessibilityPermission else {
-            UserDefaults.standard.set(true, forKey: key)
-            return
-        }
-        UserDefaults.standard.set(true, forKey: key)
+        let key = "promptedForAccessibilityByBuild"
+        let build = Self.installedBuildFingerprint()
+        guard UserDefaults.standard.string(forKey: key) != build else { return }
+        UserDefaults.standard.set(build, forKey: key)
+        guard !TextCapture.hasAccessibilityPermission else { return }
         TextCapture.requestAccessibilityPermission()
+    }
+
+    /// Identifies *this installed build*, not just "we have asked once before".
+    ///
+    /// A plain bool survives `rm -rf ~/Applications/McGrammar.app` — UserDefaults lives in
+    /// ~/Library/Preferences — so a reinstalling user got no prompt at all unless they knew to run
+    /// the `defaults delete` line in the README. Keying on the executable's path and modification
+    /// date re-arms the prompt for every freshly installed bundle, which is what README's "the
+    /// first launch of a newly installed bundle asks for it" actually promises.
+    private static func installedBuildFingerprint() -> String {
+        let executable = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
+        let modified = (try? FileManager.default.attributesOfItem(atPath: executable.path)[.modificationDate] as? Date)
+            ?? nil
+        let stamp = modified.map { String(Int($0.timeIntervalSince1970)) } ?? "unknown"
+        return "\(executable.path)@\(stamp)"
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -59,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let fixItem = NSMenuItem(
             title: "Fix Selected Text",
-            action: #selector(fixSelectionMenuAction),
+            action: #selector(fixSelection),
             keyEquivalent: "d"
         )
         fixItem.keyEquivalentModifierMask = [.control, .option]
@@ -128,10 +143,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Actions
 
-    @objc private func fixSelectionMenuAction() {
-        fixSelectionViaHotKey()
-    }
-
     @objc private func redetectClaude() {
         DispatchQueue.global(qos: .utility).async {
             ClaudeRunner.shared.resolveBinary()
@@ -164,11 +175,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.terminate(nil)
     }
 
-    // MARK: - Hotkey path
+    // MARK: - Synthetic-keystroke path (hotkey and menu item)
 
     /// Copy the selection out of the focused app, correct it, paste it back, restore the clipboard.
-    /// Requires Accessibility permission because it drives ⌘C/⌘V with synthetic events.
-    private func fixSelectionViaHotKey() {
+    /// Requires Accessibility permission because it drives ⌘C/⌘V with synthetic events. Reached
+    /// from both ⌃⌥D and the menu item — the Services path does not come through here.
+    @objc private func fixSelection() {
         guard !isBusy else {
             Toast.shared.show("Already working on a fix…")
             return
@@ -184,14 +196,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
+        // Armed before the pasteboard is touched, not after. `copySelection` pumps the main run
+        // loop for up to 250ms waiting on the synthetic ⌘C, so a second ⌃⌥D delivered in that
+        // window re-enters this method; with the guard set later it passed, and snapshotted a
+        // pasteboard that by then held the copied selection. That is the permanent loss of the
+        // user's clipboard this guard exists to prevent.
+        isBusy = true
+
         let snapshot = TextCapture.snapshotPasteboard()
         guard let selection = TextCapture.copySelection() else {
             TextCapture.restore(snapshot)
+            isBusy = false
             Toast.shared.show("No text selected — highlight something first.", isError: true)
             return
         }
 
-        isBusy = true
         StatusIcon.shared.setState(.working)
 
         ClaudeRunner.shared.fixAsync(selection) { [weak self] result in
@@ -199,13 +218,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
             switch result {
             case .success(let corrected):
-                TextCapture.paste(corrected)
+                let pastedChangeCount = TextCapture.paste(corrected)
                 StatusIcon.shared.setState(.idle)
                 // Stay busy until the clipboard is back to how the user left it. Releasing the
                 // guard at completion instead would let a second ⌃⌥D snapshot the correction that
                 // is still sitting on the pasteboard, and the original would be lost for good.
                 DispatchQueue.main.asyncAfter(deadline: .now() + TextCapture.clipboardRestoreDelay) {
-                    TextCapture.restore(snapshot)
+                    TextCapture.restore(snapshot, ifUnchangedSince: pastedChangeCount)
                     self.isBusy = false
                 }
             case .failure(let failure):

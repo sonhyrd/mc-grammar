@@ -17,8 +17,18 @@ BINARY="$(swift build -c release --show-bin-path)/$APP_NAME"
 echo "==> Stopping any running instance"
 # The bundle cannot be replaced underneath a live process, and a stale one would keep the
 # old Services registration alive.
-pkill -x "$APP_NAME" 2>/dev/null || true
-sleep 0.5
+# Target the installed bundle, not every process that happens to share the name, and poll for
+# the exit rather than sleeping a fixed beat — on a slow machine the rm below would otherwise
+# delete the bundle out from under a still-live process, the exact state this step avoids.
+pkill -f "$APP_PATH/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+for _ in $(seq 1 40); do
+  pgrep -f "$APP_PATH/Contents/MacOS/$APP_NAME" >/dev/null 2>&1 || break
+  sleep 0.1
+done
+if pgrep -f "$APP_PATH/Contents/MacOS/$APP_NAME" >/dev/null 2>&1; then
+  echo "A running $APP_NAME did not exit after 4s. Quit it from the menu bar and re-run." >&2
+  exit 1
+fi
 
 echo "==> Assembling $APP_PATH"
 rm -rf "$APP_PATH"

@@ -8,10 +8,11 @@ import Foundation
 /// dedicated working directory that nothing else uses, then deletes the transcripts that appear
 /// for that directory after each fix.
 ///
-/// Everything here is best-effort and deliberately narrow: only `.jsonl` files, only inside a
-/// project directory whose name carries our marker, and only ones written during the run that just
-/// finished. If the CLI ever changes where it stores transcripts, this finds nothing and does
-/// nothing — it can never reach a directory McGrammar did not cause to exist.
+/// Everything here is best-effort and deliberately narrow: only `.jsonl` files, and only inside a
+/// project directory whose name carries our marker. It is deliberately NOT narrowed by
+/// modification time — see `purge()` for why that filter leaks. If the CLI ever changes where it
+/// stores transcripts, this finds nothing and does nothing — it can never reach a directory
+/// McGrammar did not cause to exist.
 enum Transcripts {
     /// Distinctive enough that a slugified path can only match if it is ours.
     static let marker = "McGrammar-cli-workspace"
@@ -55,10 +56,24 @@ enum Transcripts {
     private static func ourProjectDirectories() -> [URL] {
         let contents = try? FileManager.default.contentsOfDirectory(
             at: projectsURL,
-            includingPropertiesForKeys: [.isDirectoryKey],
+            includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         )
         return (contents ?? []).filter { $0.lastPathComponent.contains(marker) }
+    }
+
+    /// Every transcript sitting in our project directories. The single definition of "ours" —
+    /// `purge` and `pendingCount` must agree on it, or the self-test reports clean on files the
+    /// sweep never touches.
+    private static func transcriptFiles() -> [URL] {
+        ourProjectDirectories().flatMap { directory -> [URL] in
+            let files = (try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )) ?? []
+            return files.filter { $0.pathExtension == "jsonl" }
+        }
     }
 
     /// Deletes every transcript in our project directories. Returns how many were removed.
@@ -74,20 +89,13 @@ enum Transcripts {
     @discardableResult
     static func purge() -> Int {
         var removed = 0
-        for directory in ourProjectDirectories() {
-            let files = (try? FileManager.default.contentsOfDirectory(
-                at: directory,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            )) ?? []
-            for file in files where file.pathExtension == "jsonl" {
-                do {
-                    try FileManager.default.removeItem(at: file)
-                    removed += 1
-                } catch {
-                    // Best effort by design — a transcript we cannot delete is not worth an alert.
-                    // The next fix sweeps it up, which is exactly what the date filter prevented.
-                }
+        for file in transcriptFiles() {
+            do {
+                try FileManager.default.removeItem(at: file)
+                removed += 1
+            } catch {
+                // Best effort by design — a transcript we cannot delete is not worth an alert.
+                // The next fix sweeps it up, which is exactly what the date filter prevented.
             }
         }
         return removed
@@ -96,9 +104,6 @@ enum Transcripts {
     /// How many transcripts are sitting in our project directories right now. Used by --selftest
     /// so the cleanup can actually be observed rather than taken on faith.
     static func pendingCount() -> Int {
-        ourProjectDirectories().reduce(0) { total, directory in
-            let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-            return total + files.filter { $0.hasSuffix(".jsonl") }.count
-        }
+        transcriptFiles().count
     }
 }

@@ -34,6 +34,11 @@ final class ServiceProvider: NSObject {
             pasteboard.setString(corrected, forType: .string)
             StatusIcon.shared.setState(.idle)
         case .failure(let failure):
+            // Clear the return pasteboard explicitly. NSReturnTypes is declared, so leaving the
+            // incoming text sitting there invites macOS to "replace" the selection with a plain
+            // copy of itself — silently flattening any attributes the selection carried. An empty
+            // return pasteboard alongside the error leaves the user's selection alone.
+            pasteboard.clearContents()
             error?.pointee = failure.description as NSString
             StatusIcon.shared.flashError()
             Toast.shared.show(failure.description, isError: true, duration: 5)

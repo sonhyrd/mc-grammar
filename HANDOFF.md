@@ -85,7 +85,8 @@ McGrammar/
 ### 3.4 App bundle & signing
 
 - `LSUIElement = true` (menu bar only, no Dock icon); `NSApp.setActivationPolicy(.accessory)`.
-- `make-app.sh`: `swift build -c release` → assemble `~/Applications/McGrammar.app/Contents/{MacOS,Info.plist}` → `codesign --force --sign -` (ad-hoc, so TCC/Accessibility grants survive rebuilds) → flush pbs → `open`.
+- `make-app.sh`: `swift build -c release` → assemble `~/Applications/McGrammar.app/Contents/{MacOS,Info.plist}` → `codesign --force --sign - --identifier com.zernonia.mcgrammar -r='designated => identifier "com.zernonia.mcgrammar"'` → flush pbs → `open`.
+- **Corrected since this brief was written:** ad-hoc signing *alone* does NOT preserve TCC grants. Left to itself codesign derives a designated requirement pinning the exact `cdhash`, so every rebuild silently voids the Accessibility grant while System Settings still shows a ticked entry. The explicit `-r=` above is what makes the grant survive; `--identifier` alone is not enough. See CLAUDE.md → Bundle.
 - Kill any running instance before replacing the binary.
 
 ---

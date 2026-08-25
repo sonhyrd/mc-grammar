@@ -9,10 +9,32 @@ enum TextCapture {
     /// How long to wait for the focused app to answer a synthetic ⌘C.
     private static let copySettleTimeout: TimeInterval = 0.25
     /// How long the correction stays on the clipboard before the original contents are restored.
-    static let clipboardRestoreDelay: TimeInterval = 0.6
+    ///
+    /// This is a race by construction: it has to outlast the focused app processing the synthetic
+    /// ⌘V, and nothing on the pasteboard tells us when that has happened. A loaded Electron app, a
+    /// busy main thread or a VM target can lose it, and the symptom is a selection left unchanged
+    /// with no error. Overridable so a user on a slow target can raise it without a rebuild:
+    ///   defaults write com.zernonia.mcgrammar ClipboardRestoreDelay -float 1.2
+    static var clipboardRestoreDelay: TimeInterval {
+        let override = UserDefaults.standard.double(forKey: "ClipboardRestoreDelay")
+        return override > 0 ? override : defaultClipboardRestoreDelay
+    }
+
+    static let defaultClipboardRestoreDelay: TimeInterval = 0.6
 
     struct Snapshot {
-        let items: [[String: Data]]
+        /// Ordered (type, data) pairs per pasteboard item. Ordered on purpose: a pasteboard item's
+        /// type order is its preference order, and the dictionary this used to be scrambled it, so
+        /// a restored clipboard could hand a pasting app the wrong flavour first.
+        let items: [[(type: String, data: Data)]]
+        /// The pasteboard's change count when the snapshot was taken. Lets `restore` tell "nothing
+        /// has touched the clipboard since" from "we replaced it and must put it back".
+        let changeCount: Int
+        /// True when at least one item declared a type whose data could not be read — promised or
+        /// lazily-rendered flavours (file promises, some app-private types) return nil from
+        /// `data(forType:)` until a receiver asks for them, and no snapshot API can materialise
+        /// them on our behalf. Such flavours cannot be restored; see `restore`.
+        let hasUnreadableFlavors: Bool
     }
 
     static var hasAccessibilityPermission: Bool {
@@ -31,21 +53,37 @@ enum TextCapture {
 
     static func snapshotPasteboard() -> Snapshot {
         let pasteboard = NSPasteboard.general
-        var items: [[String: Data]] = []
+        var items: [[(type: String, data: Data)]] = []
+        var unreadable = false
         for item in pasteboard.pasteboardItems ?? [] {
-            var stored: [String: Data] = [:]
+            var stored: [(type: String, data: Data)] = []
             for type in item.types {
                 if let data = item.data(forType: type) {
-                    stored[type.rawValue] = data
+                    stored.append((type: type.rawValue, data: data))
+                } else {
+                    unreadable = true
                 }
             }
             if !stored.isEmpty { items.append(stored) }
         }
-        return Snapshot(items: items)
+        return Snapshot(
+            items: items,
+            changeCount: pasteboard.changeCount,
+            hasUnreadableFlavors: unreadable
+        )
     }
 
+    /// Puts the snapshot back. Clears first, so it must never run on a pasteboard we never
+    /// replaced — that would destroy the contents it exists to preserve.
+    ///
+    /// Known gap: flavours flagged by `hasUnreadableFlavors` are gone. A promised type cannot be
+    /// read without a receiver asking for it, so there is nothing to write back; the readable
+    /// flavours of the same item are restored in their original order. README documents this.
     static func restore(_ snapshot: Snapshot) {
         let pasteboard = NSPasteboard.general
+        // Nothing has touched the clipboard since the snapshot — the commonest case being a ⌘C
+        // the focused app never answered. Clearing here would wipe a clipboard we never replaced.
+        guard pasteboard.changeCount != snapshot.changeCount else { return }
         pasteboard.clearContents()
         guard !snapshot.items.isEmpty else { return }
         let items: [NSPasteboardItem] = snapshot.items.map { stored in
@@ -80,14 +118,26 @@ enum TextCapture {
         return text
     }
 
-    /// Puts `text` on the clipboard and simulates ⌘V into the focused app.
-    static func paste(_ text: String) {
+    /// Puts `text` on the clipboard and simulates ⌘V into the focused app. Returns the pasteboard's
+    /// change count afterwards, so the caller can tell whether anything else has written to the
+    /// clipboard before it restores — see `restore(_:ifUnchangedSince:)`.
+    @discardableResult
+    static func paste(_ text: String) -> Int {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         // Give the pasteboard server a beat to publish before the paste lands.
         usleep(60_000)
         sendKeystroke(virtualKey: CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
+        return pasteboard.changeCount
+    }
+
+    /// Restores the snapshot only if the clipboard still holds what we put there. If something
+    /// else has written to it in the meantime — a clipboard manager, the user copying something —
+    /// that content is newer than the snapshot and putting the snapshot back would destroy it.
+    static func restore(_ snapshot: Snapshot, ifUnchangedSince changeCount: Int) {
+        guard NSPasteboard.general.changeCount == changeCount else { return }
+        restore(snapshot)
     }
 
     private static func sendKeystroke(virtualKey: CGKeyCode, flags: CGEventFlags) {

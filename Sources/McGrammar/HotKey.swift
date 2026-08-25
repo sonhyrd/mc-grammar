@@ -12,13 +12,15 @@ final class HotKey {
     /// active instance is parked in a file-private global.
     fileprivate static var active: HotKey?
 
-    /// Registers ⌃⌥D by default. Returns false if another app already owns the combination.
+    /// The one combination McGrammar registers. Inlined rather than parameterised: no caller ever
+    /// passed anything else, and configurable hotkeys are a roadmap item (prompt presets), not a
+    /// need the app has today.
+    private static let keyCode = UInt32(kVK_ANSI_D)
+    private static let modifiers = UInt32(controlKey | optionKey)
+
+    /// Registers ⌃⌥D. Returns false if another app already owns the combination.
     @discardableResult
-    func register(
-        keyCode: UInt32 = UInt32(kVK_ANSI_D),
-        modifiers: UInt32 = UInt32(controlKey | optionKey),
-        handler: @escaping () -> Void
-    ) -> Bool {
+    func register(handler: @escaping () -> Void) -> Bool {
         unregister()
         self.handler = handler
         HotKey.active = self
@@ -35,12 +37,18 @@ final class HotKey {
             nil,
             &eventHandler
         )
-        guard installStatus == noErr else { return false }
+        guard installStatus == noErr else {
+            // Do not leave a half-registered instance parked in the global: `fire()` would then
+            // reach an object that never installed a handler.
+            self.handler = nil
+            if HotKey.active === self { HotKey.active = nil }
+            return false
+        }
 
         let hotKeyID = EventHotKeyID(signature: OSType(0x4D43_4752) /* 'MCGR' */, id: 1)
         let registerStatus = RegisterEventHotKey(
-            keyCode,
-            modifiers,
+            Self.keyCode,
+            Self.modifiers,
             hotKeyID,
             GetApplicationEventTarget(),
             0,
@@ -59,6 +67,7 @@ final class HotKey {
             self.eventHandler = nil
         }
         handler = nil
+        if HotKey.active === self { HotKey.active = nil }
     }
 
     fileprivate func fire() {

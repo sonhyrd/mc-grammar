@@ -87,9 +87,13 @@ enum SelfTest {
         if leftover == 0 {
             print("✓  No CLI transcripts left behind (\(Transcripts.workspaceURL.path))")
         } else {
-            print("!  \(leftover) transcript(s) still in McGrammar's CLI workspace.")
+            // A failure, not a warning. The privacy guarantee is that nothing is left on disk, and
+            // README points at this check as the thing that proves it — counting it as a note let
+            // a broken purge exit 0 and report "All checks passed" over a pile of the user's text.
+            print("✗  \(leftover) transcript(s) still in McGrammar's CLI workspace.")
             print("   Expected 0 — the cleanup either did not match the CLI's storage layout or")
             print("   another fix was running concurrently. Inspect ~/.claude/projects.")
+            failures += 1
         }
 
         print(String(repeating: "─", count: 52))
@@ -99,18 +103,5 @@ enum SelfTest {
         }
         print("\(failures) check(s) failed.")
         return 1
-    }
-
-    /// `McGrammar --fix` — reads stdin, prints the correction. Handy for piping and diffing.
-    static func fixStdin() -> Int32 {
-        let input = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        switch ClaudeRunner.shared.fixSync(input) {
-        case .success(let corrected):
-            print(corrected)
-            return 0
-        case .failure(let failure):
-            FileHandle.standardError.write(Data("McGrammar: \(failure.description)\n".utf8))
-            return 1
-        }
     }
 }
