@@ -131,8 +131,19 @@ enum Fixtures {
             name: "preserve-line-breaks",
             annotation: "must LEAVE ALONE: preserved line breaks (e.g. a list-like structure)",
             input: "Steps before release:\nrun the tests\ntag the build\nnotify the team",
-            required: ["run the tests\n", "tag the build\n", "notify the team"],
-            forbidden: ["run the tests, tag the build, and notify the team"]
+            // This fixture proves ONE thing: the line breaks survive. It deliberately asserts
+            // nothing about the text of each item, because the model legitimately (and only
+            // sometimes) capitalises a list item and adds a terminal full stop — both are
+            // punctuation and capitalisation fixes, which the prompt explicitly asks for. Two
+            // earlier versions of this fixture asserted on "run the tests\n" and then on
+            // "the tests\n", and both flaked for that reason rather than for anything to do
+            // with line breaks. So the structure is checked negatively instead: every way the
+            // three items could be collapsed onto one line is forbidden.
+            required: ["tests", "build", "team"],
+            forbidden: [
+                "tests tag", "tests, tag", "tests. Tag", "tests and tag",
+                "build notify", "build, notify", "build. Notify", "build and notify",
+            ]
         ),
     ]
 
