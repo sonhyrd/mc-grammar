@@ -7,7 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var claudeStatusItem: NSMenuItem?
     private var accessibilityItem: NSMenuItem?
-    private var hotKeyRegistered = false
+    private var hotKeyRegistration: HotKeyRegistration = .registrationFailed(noErr)
     private var isBusy = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.servicesProvider = serviceProvider
         NSUpdateDynamicServices()
 
-        hotKeyRegistered = hotKey.register { [weak self] in
+        hotKeyRegistration = hotKey.register { [weak self] in
             self?.fixSelection()
         }
 
@@ -133,9 +133,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let granted = TextCapture.hasAccessibilityPermission
         if granted {
-            accessibilityItem?.title = hotKeyRegistered
+            // Report the actual registration outcome, not just "not active". A hotkey that does
+            // nothing looks identical to a broken app from the outside, so the menu is the only
+            // place the cause can surface.
+            accessibilityItem?.title = hotKeyRegistration.isRegistered
                 ? "Accessibility: granted (hotkey ⌃⌥D active)"
-                : "Accessibility: granted — hotkey ⌃⌥D is taken by another app"
+                : "Accessibility: granted — hotkey ⌃⌥D \(hotKeyRegistration.detail)"
         } else {
             accessibilityItem?.title = "Accessibility: not granted — click to fix hotkey"
         }

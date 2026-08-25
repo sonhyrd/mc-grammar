@@ -48,11 +48,6 @@
 			</array>
 			<key>NSTimeout</key>
 			<string>120000</string>
-			<key>NSKeyEquivalent</key>
-			<dict>
-				<key>default</key>
-				<string>@^$g</string>
-			</dict>
 		</dict>
 	</array>
 </dict>
