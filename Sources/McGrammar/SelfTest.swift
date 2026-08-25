@@ -80,7 +80,7 @@ enum SelfTest {
             }
         }
 
-        // 5. The real round trip.
+        // 6. The real round trip.
         guard path != nil else {
             print(String(repeating: "─", count: 52))
             print("FAILED — install Claude Code and run `claude login`, then re-run.")
@@ -91,7 +91,7 @@ enum SelfTest {
             failures += roundTrip(preset: preset, sample: sample)
         }
 
-        // 6. Nothing should be left behind by the run that just happened.
+        // 7. Nothing should be left behind by the run that just happened.
         let leftover = Transcripts.pendingCount()
         if leftover == 0 {
             print("✓  No CLI transcripts left behind (\(Transcripts.workspaceURL.path))")
@@ -126,34 +126,30 @@ enum SelfTest {
     /// empty output rather than being decorated with the selection's own whitespace and pasted
     /// back as a success.
     private static func whitespaceChecks() -> [Check] {
-        func shaped(_ original: String, _ raw: String, expect: String) -> Check {
-            let result = ClaudeRunner.restoreOuterWhitespace(from: original, onto: raw)
-            guard case .success(let value) = result else {
-                return Check(name: "", passed: false, detail: "expected success, got a failure")
+        func shaping(_ name: String, from original: String, onto raw: String, expect: String) -> Check {
+            guard case .success(let value) = ClaudeRunner.restoreOuterWhitespace(from: original, onto: raw) else {
+                return Check(name: name, passed: false, detail: "expected success, got a failure")
             }
-            return Check(name: "", passed: value == expect, detail: "got \(String(reflecting: value))")
-        }
-        func named(_ name: String, _ check: Check) -> Check {
-            Check(name: name, passed: check.passed, detail: check.detail)
+            return Check(name: name, passed: value == expect, detail: "got \(String(reflecting: value))")
         }
 
         var checks: [Check] = []
 
-        checks.append(named(
+        checks.append(shaping(
             "A trailing newline in the selection survives the round trip",
-            shaped("Fix this.\n", "Fixed this.", expect: "Fixed this.\n")
+            from: "Fix this.\n", onto: "Fixed this.", expect: "Fixed this.\n"
         ))
-        checks.append(named(
+        checks.append(shaping(
             "Leading indentation is taken from the selection, not the model",
-            shaped("    indented line", "  indented line  ", expect: "    indented line")
+            from: "    indented line", onto: "  indented line  ", expect: "    indented line"
         ))
-        checks.append(named(
+        checks.append(shaping(
             "Leading and trailing whitespace are both restored",
-            shaped("\n\n  padded  \n\n", "padded", expect: "\n\n  padded  \n\n")
+            from: "\n\n  padded  \n\n", onto: "padded", expect: "\n\n  padded  \n\n"
         ))
-        checks.append(named(
+        checks.append(shaping(
             "A selection with no outer whitespace gains none",
-            shaped("no padding", "no padding", expect: "no padding")
+            from: "no padding", onto: "no padding", expect: "no padding"
         ))
 
         var blankRejected = false
@@ -173,39 +169,39 @@ enum SelfTest {
     /// One live fix per preset. Returns the number of failures it found.
     private static func roundTrip(preset: Preset, sample: String) -> Int {
         var failures = 0
-            print("·  \(preset.displayName): \"\(sample)\"")
-            let started = Date()
-            let result = ClaudeRunner.shared.fixSync(sample, preset: preset)
-            let elapsed = Date().timeIntervalSince(started)
+        print("·  \(preset.displayName): \"\(sample)\"")
+        let started = Date()
+        let result = ClaudeRunner.shared.fixSync(sample, preset: preset)
+        let elapsed = Date().timeIntervalSince(started)
 
-            switch result {
-            case .success(let outcome):
-                print("✓  \(preset.displayName) round trip completed in \(String(format: "%.1f", elapsed))s (CLI reported \(outcome.durationMs)ms, model \(outcome.model), \(outcome.thinkingTokens) thinking tokens)")
-                print("   → \(outcome.text)")
-                if outcome.text == sample {
-                    print("!  Output is identical to the input — check the prompt or the CLI version.")
-                }
-                if outcome.thinkingTokens == 0 {
-                    print("✓  Extended thinking is off (0 thinking tokens).")
-                } else {
-                    // A failure, not a warning. MAX_THINKING_TOKENS=0 is an environment variable, not a
-                    // documented CLI flag, and it is the single largest latency lever we have — see
-                    // docs/adr/0001-isolate-the-claude-code-invocation.md for the measured wall-clock
-                    // figures (~2.25s with thinking off, floored by CLI process startup, not inference).
-                    // The model was previously spending ~90% of its output budget reasoning about a
-                    // six-word typo. A future CLI that silently ignores the variable would reintroduce
-                    // that cost and latency with nothing else failing, so this tripwire exists
-                    // specifically to catch that regression.
-                    print("✗  Extended thinking is ON (\(outcome.thinkingTokens) thinking tokens).")
-                    print("   MAX_THINKING_TOKENS=0 is being ignored by the installed CLI. Latency will")
-                    print("   have roughly doubled as a result. Check the CLI version and the environment")
-                    print("   passed to the child process.")
-                    failures += 1
-                }
-            case .failure(let failure):
-                print("✗  Round trip failed: \(failure.description)")
+        switch result {
+        case .success(let outcome):
+            print("✓  \(preset.displayName) round trip completed in \(String(format: "%.1f", elapsed))s (CLI reported \(outcome.durationMs)ms, model \(outcome.model), \(outcome.thinkingTokens) thinking tokens)")
+            print("   → \(outcome.text)")
+            if outcome.text == sample {
+                print("!  Output is identical to the input — check the prompt or the CLI version.")
+            }
+            if outcome.thinkingTokens == 0 {
+                print("✓  Extended thinking is off (0 thinking tokens).")
+            } else {
+                // A failure, not a warning. MAX_THINKING_TOKENS=0 is an environment variable, not a
+                // documented CLI flag, and it is the single largest latency lever we have — see
+                // docs/adr/0001-isolate-the-claude-code-invocation.md for the measured wall-clock
+                // figures (~2.25s with thinking off, floored by CLI process startup, not inference).
+                // The model was previously spending ~90% of its output budget reasoning about a
+                // six-word typo. A future CLI that silently ignores the variable would reintroduce
+                // that cost and latency with nothing else failing, so this tripwire exists
+                // specifically to catch that regression.
+                print("✗  Extended thinking is ON (\(outcome.thinkingTokens) thinking tokens).")
+                print("   MAX_THINKING_TOKENS=0 is being ignored by the installed CLI. Latency will")
+                print("   have roughly doubled as a result. Check the CLI version and the environment")
+                print("   passed to the child process.")
                 failures += 1
             }
+        case .failure(let failure):
+            print("✗  Round trip failed: \(failure.description)")
+            failures += 1
+        }
         return failures
     }
 }

@@ -18,14 +18,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var alternateHotKeyRegistration: HotKeyRegistration = .registrationFailed(noErr)
     private var isBusy = false
 
-    /// Short on purpose. This fires on every successful fix, so at the error toast's five seconds
-    /// it would become noise the user learns to look past — which would cost the signal exactly
-    /// when it matters.
-    private static let successToastDuration: TimeInterval = 2
-
     /// Bumped whenever the default preset changes, so a future change can notify again instead of
     /// being permanently silenced by this one. A plain boolean would have been a one-shot.
     private static let defaultPresetNoticeGeneration = 1
+
+    /// Holds a build fingerprint, not a flag — see `installedBuildFingerprint`. Named once because
+    /// two call sites reading it under different spellings is exactly how the upgrade notice came
+    /// to be gated on a key nothing wrote.
+    private static let accessibilityPromptKey = "promptedForAccessibilityByBuild"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // The one place the policy is set. LSUIElement in Info.plist covers the bundled app; this
@@ -57,8 +57,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.async { self.refreshMenuState() }
         }
 
+        // Sampled BEFORE promptForAccessibilityOnFirstLaunch, which writes this key on its way
+        // through and would otherwise make every fresh install look like an upgrade.
+        let hasRunPreviously = UserDefaults.standard.string(forKey: Self.accessibilityPromptKey) != nil
         promptForAccessibilityOnFirstLaunch()
-        announceDefaultPresetChangeIfNeeded()
+        announceDefaultPresetChangeIfNeeded(hasRunPreviously: hasRunPreviously)
     }
 
     /// macOS shows the "McGrammar would like to control this computer" dialog at most once per
@@ -67,10 +70,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// leaving the user to discover the menu item. The Services path never needs this, which is
     /// why a decline is silent: the app stays fully usable.
     private func promptForAccessibilityOnFirstLaunch() {
-        let key = "promptedForAccessibilityByBuild"
         let build = Self.installedBuildFingerprint()
-        guard UserDefaults.standard.string(forKey: key) != build else { return }
-        UserDefaults.standard.set(build, forKey: key)
+        guard UserDefaults.standard.string(forKey: Self.accessibilityPromptKey) != build else { return }
+        UserDefaults.standard.set(build, forKey: Self.accessibilityPromptKey)
         guard !TextCapture.hasAccessibilityPermission else { return }
         TextCapture.requestAccessibilityPermission()
     }
@@ -94,24 +96,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// different — and how to get the old behaviour back.
     ///
     /// Only existing installations. A fresh install never had the old behaviour, so announcing a
-    /// change to it is noise; `hasPromptedForAccessibility` is the marker that a previous version
-    /// has run here. Fresh installs still get the generation recorded, so they are not told about
-    /// this change later.
+    /// change to it is noise. `hasRunPreviously` must be sampled by the caller before the
+    /// Accessibility prompt runs, because that prompt writes the very key this reads. Fresh
+    /// installs still get the generation recorded, so they are not told about this change later.
     ///
     /// An alert rather than a toast, deliberately. The default of a destructive-by-nature gesture
     /// changed: a toast at launch is missable, and a notice about a surprise that the user misses
     /// is the surprise, not the notice. It carries the remedy, because announcing that something
     /// someone relies on has moved without saying where it went converts a surprise into a
     /// complaint.
-    private func announceDefaultPresetChangeIfNeeded() {
+    private func announceDefaultPresetChangeIfNeeded(hasRunPreviously: Bool) {
         let key = "defaultPresetNoticeGeneration"
         let defaults = UserDefaults.standard
-        let seen = defaults.integer(forKey: key)
-        guard seen < Self.defaultPresetNoticeGeneration else { return }
+        guard defaults.integer(forKey: key) < Self.defaultPresetNoticeGeneration else { return }
         defaults.set(Self.defaultPresetNoticeGeneration, forKey: key)
 
-        let isExistingInstall = defaults.bool(forKey: "hasPromptedForAccessibility")
-        guard isExistingInstall else { return }
+        guard hasRunPreviously else { return }
 
         let alert = NSAlert()
         alert.messageText = "⌃⌥D now runs \(Preset.standard.displayName)"
@@ -212,16 +212,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Report the actual registration outcome, not just "not active". A hotkey that does
             // nothing looks identical to a broken app from the outside, so the menu is the only
             // place the cause can surface.
-            let standardDetail = standardHotKeyRegistration.isRegistered
-                ? "⌃⌥D active"
-                : "⌃⌥D \(standardHotKeyRegistration.detail)"
-            let alternateDetail = alternateHotKeyRegistration.isRegistered
-                ? "⌃⌥⇧D active"
-                : "⌃⌥⇧D \(alternateHotKeyRegistration.detail)"
-            accessibilityItem?.title = "Accessibility: granted (\(standardDetail), \(alternateDetail))"
+            accessibilityItem?.title = "Accessibility: granted (\(hotKeyStatusSummary()))"
         } else {
-            accessibilityItem?.title = "Accessibility: not granted — click to fix hotkey"
+            // The registration status is reported here too. Carbon registration does not need
+            // Accessibility — only the synthetic keystrokes do — so a combination can be taken by
+            // another app while the grant is also missing, and this is the state a user debugging
+            // a dead hotkey is most likely to be in.
+            accessibilityItem?.title =
+                "Accessibility: not granted — click to fix (\(hotKeyStatusSummary()))"
         }
+    }
+
+    private func hotKeyStatusSummary() -> String {
+        let standard = standardHotKeyRegistration.isRegistered
+            ? "⌃⌥D active"
+            : "⌃⌥D \(standardHotKeyRegistration.detail)"
+        let alternate = alternateHotKeyRegistration.isRegistered
+            ? "⌃⌥⇧D active"
+            : "⌃⌥⇧D \(alternateHotKeyRegistration.detail)"
+        return "\(standard), \(alternate)"
     }
 
     // MARK: - Actions
@@ -251,7 +260,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension") {
             NSWorkspace.shared.open(url)
         }
-        Toast.shared.show("Keyboard → Keyboard Shortcuts → Services → Text → “Fix Grammar with McGrammar”", duration: 6)
+        Toast.shared.show(
+            "Keyboard → Keyboard Shortcuts → Services → Text → “\(Preset.standard.displayName) with McGrammar” and “\(Preset.alternate.displayName) with McGrammar”",
+            duration: 6
+        )
     }
 
     @objc private func quit() {
@@ -317,7 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // nothing was replaced is worse than no toast at all, because this signal exists
                 // precisely so the user knows a rewrite happened to their text.
                 if paste.delivered {
-                    Toast.shared.show(preset.completionVerb, duration: Self.successToastDuration)
+                    Toast.shared.show(preset.completionVerb, duration: Toast.successDuration)
                 } else {
                     StatusIcon.shared.flashError()
                     Toast.shared.show(

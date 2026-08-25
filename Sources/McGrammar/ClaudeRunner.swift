@@ -305,9 +305,13 @@ final class ClaudeRunner {
     /// - Parameter timeout: how long to wait before the watchdog fires. Defaults to
     ///   `hotkeyTimeout`; the Services path passes `servicesTimeout` explicitly since it blocks
     ///   the host application's main thread.
+    /// `preset` has no default on purpose. `Preset.standard` is the one place that decides what the
+    /// primary gesture runs; a default here would be a second, quieter answer to the same question,
+    /// and the next caller to omit the argument would silently get whatever this signature says
+    /// rather than what the app's default is.
     func fixSync(
         _ text: String,
-        preset: Preset = .proofread,
+        preset: Preset,
         timeout: TimeInterval = ClaudeRunner.hotkeyTimeout
     ) -> Result<FixOutcome, FixError> {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -494,9 +498,10 @@ final class ClaudeRunner {
     }
 
     /// Async wrapper for the hotkey path only: runs the sync core off-main, completes on main.
+    /// `preset` has no default, for the reason on `fixSync`.
     func fixAsync(
         _ text: String,
-        preset: Preset = .proofread,
+        preset: Preset,
         timeout: TimeInterval = ClaudeRunner.hotkeyTimeout,
         completion: @escaping (Result<FixOutcome, FixError>) -> Void
     ) {

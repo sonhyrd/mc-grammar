@@ -1,19 +1,15 @@
 import AppKit
 
-/// Handles the right-click → Services → “Fix Grammar with McGrammar” path.
+/// Handles the right-click → Services → “Polish with McGrammar” / “Proofread with McGrammar” paths.
 ///
 /// macOS hands us the selected text on a pasteboard and replaces the user's selection with
 /// whatever we write back, natively — no Accessibility permission, no synthetic keystrokes.
 /// That only works because `NSReturnTypes` is declared in Info.plist alongside `NSSendTypes`.
+///
+/// Every `@objc` entry point here must stay exactly in sync with an `NSMessage` in Info.plist, and
+/// each one binds to a preset rather than to whichever preset is default, so flipping the default
+/// cannot change what a menu item does.
 final class ServiceProvider: NSObject {
-    /// The selector name here must stay exactly in sync with `NSMessage` in Info.plist.
-    ///
-    /// CRITICAL INVARIANT: this runs on the main thread and must call `fixSync` directly.
-    /// Wrapping `fixAsync` in a semaphore here deadlocks — the completion dispatches to main,
-    /// which this handler is blocking. Do not "improve" it that way.
-    /// Matches the hotkey path's success toast: short, because it fires on every fix.
-    static let successToastDuration: TimeInterval = 2
-
     /// Whether the provider actually implements the selector an `NSMessage` names.
     ///
     /// `NSMessage` is a string in Info.plist and nothing checks it at build time: a typo registers
@@ -83,7 +79,7 @@ final class ServiceProvider: NSObject {
             // was replaced would be asserting something this path cannot know.
             Toast.shared.show(
                 "\(preset.completionVerb) — returned to the app",
-                duration: ServiceProvider.successToastDuration
+                duration: Toast.successDuration
             )
         case .failure(let failure):
             // Clear the return pasteboard explicitly. NSReturnTypes is declared, so leaving the

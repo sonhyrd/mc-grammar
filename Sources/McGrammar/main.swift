@@ -14,8 +14,9 @@ if arguments.contains("--help") || arguments.contains("-h") {
           McGrammar              Launch the menu bar app (⌃⌥D and ⌃⌥⇧D, plus two Services
                                   menu items)
           McGrammar --selftest   Run headless checks: CLI discovery, permissions, a real fix
-          McGrammar --fix        Read text from stdin, write the corrected text.
-                                  Add --proofread (default) or --polish to choose a preset.
+          McGrammar --fix        Read text from stdin, write the edited text. Uses the same
+                                  preset as the ⌃⌥D gesture unless you pass --polish or
+                                  --proofread.
           McGrammar --fixtures   Run the live accuracy suite against the pinned model (costs
                                   money, needs a login; not part of --selftest or swift test)
           McGrammar --help       Show this message
