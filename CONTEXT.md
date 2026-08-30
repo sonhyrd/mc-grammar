@@ -69,7 +69,7 @@ returns nothing.
 ## Translate
 
 **The first hand-off**: opens text in Google Translate in the user's browser. Its input differs by
-path, deliberately — ⌃⌥F and the menu item translate **the clipboard**, because the gesture is for
+path, deliberately — ⌃⌥T and the menu item translate **the clipboard**, because the gesture is for
 text already copied and reading the clipboard needs no permission and disturbs nothing; the
 Services entry translates the **Selection**, because that is what macOS hands it. The text
 leaves the machine, through the URL, to Google — the one exception to the guarantee that the user's

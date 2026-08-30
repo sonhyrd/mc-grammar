@@ -168,7 +168,7 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 
 ### Privacy and cleanup
 - Never log, cache, or persist user text anywhere. The README states this as a guarantee. The one
-  gesture that sends text off the machine is the Translate hand-off (⌃⌥F → Google, in the URL, so
+  gesture that sends text off the machine is the Translate hand-off (⌃⌥T → Google, in the URL, so
   it lands in browser history); see "Hand-offs" below. Everything in this section is about the
   fix paths.
 - The CLI itself persists what the app does not: `claude -p` writes a session transcript containing
@@ -195,7 +195,7 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 - `TextCapture.copySelection` asks Accessibility whether the focused text element's selection is
   empty **before** posting ⌘C, and returns nil on a definite "empty". Code editors copy the whole
   current line on ⌘C with nothing selected, and the pasteboard-changed probe alone cannot tell
-  that line from a selection — so without this a bare ⌃⌥F translates, and a bare ⌃⌥D overwrites,
+  that line from a selection — so without this a bare ⌃⌥T translates, and a bare ⌃⌥D overwrites,
   a line of code the user never picked. Gated on the text-field/text-area role; when AX cannot
   answer it degrades to the ⌘C probe. Do not drop the pre-check, and do not widen it past a
   definite empty answer.
@@ -227,6 +227,18 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
   one easy sample would not have.
 - The Services path cannot be tested from `swift run`; it requires the .app bundle.
 
+### Hotkey chords
+- **The letter matters, and the constraint is the user's input method, not the app.** Translate
+  shipped as ⌃⌥F and silently did not fire inside text inputs on a machine set to Vietnamese
+  Simple Telex: Telex claims `f` as the huyền tone key, so the input method consumes the keystroke
+  before the hotkey sees it. The symptom is the nastiest kind — the chord works everywhere except
+  where the user is typing, which is the only place they use it. It is now ⌃⌥T.
+- Telex claims `s f r x j a e o w d`. Avoid all of them for any new chord; prefer
+  `t b c g h i k l m n p q u v y z`. ⌃⌥D and ⌃⌥⇧D keep `d` by grandfathering — if a Telex user
+  ever reports the fix hotkeys dead in text fields, this is why, and the fix is a new letter.
+- Every chord's registration outcome stays visible in the menu bar dropdown
+  (`HotKeyRegistration.detail`). A dead hotkey is otherwise indistinguishable from a broken app.
+
 ### Hand-offs
 - A hand-off (`CONTEXT.md`) sends the selection out and changes nothing in the host app. Translate
   is the only one. It is **not** a `Preset` — `Preset.alternate`, the `allCases`-driven selftest
@@ -235,7 +247,7 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 - It is the one exception to the privacy guarantee: the text goes to Google in the URL. README and
   `NSHumanReadableCopyright` say so; keep them saying so.
 - **Translate's input is the clipboard on the hotkey path and the selection on the Services path,
-  and that asymmetry is deliberate.** ⌃⌥F reads `NSPasteboard.general` and posts no ⌘C: the
+  and that asymmetry is deliberate.** ⌃⌥T reads `NSPasteboard.general` and posts no ⌘C: the
   gesture is for text the user has already copied, so it needs no Accessibility grant, no busy
   guard and no snapshot/restore, and it cannot disturb the pasteboard. The Services entry gets the
   selection because that is what macOS hands it. Do not "unify" these onto the selection — the
@@ -254,7 +266,7 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 2. **Streaming** via `--output-format stream-json` for perceived speed.
 3. ~~**Prompt presets**~~ — Proofread and Polish shipped with per-preset hotkeys (ADR 0002).
    Remaining: a settings window, and Casual↔Formal as a further preset. Translate shipped as a
-   **hand-off** (⌃⌥F → Google Translate, ADR 0003), not a preset. A register-shifting
+   **hand-off** (⌃⌥T → Google Translate, ADR 0003), not a preset. A register-shifting
    preset is the one licensed to change what the text says about itself; keep it an explicit choice
    and never a default.
 4. **Async services variant**: return immediately and paste when done. Unblocks the calling app at

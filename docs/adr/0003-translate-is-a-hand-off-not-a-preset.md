@@ -20,7 +20,7 @@ exception, and an exception to a guarantee needs to be recorded, not slipped in.
 
 ## Decision
 
-**Translate is a hand-off — a new concept in `CONTEXT.md` — not a preset.** ⌃⌥F copies the
+**Translate is a hand-off — a new concept in `CONTEXT.md` — not a preset.** ⌃⌥T copies the
 selection, restores the clipboard, and opens
 `https://translate.google.com/?sl=auto&tl=vi&text=<encoded>&op=translate` in the default browser.
 Nothing in the host app changes. The same action is a send-only Services item ("Translate with
