@@ -12,6 +12,13 @@ place. Two presets:
 - **Proofread** (⌃⌥⇧D) — spelling, grammar and punctuation only. Minimum change. Reach for it when
   you want to be certain nothing but a mistake was touched.
 
+And one **hand-off**, which changes nothing in the app you are in:
+
+- **Translate** (⌃⌥F) — opens the selection in Google Translate in your browser, source language
+  detected, Vietnamese as the target (`defaults write com.zernonia.mcgrammar TranslateTarget ja`
+  to change it). No Claude involved. This is the one gesture that sends your text somewhere other
+  than your own CLI — see Privacy.
+
 Polish never changes what your text says. It may not add, remove or alter a fact, name, number,
 quotation or link, and it will not make a tentative claim confident or a confident one tentative —
 a guarantee the accuracy suite (`--fixtures`) is what proves, because a rewrite is not something
@@ -98,13 +105,20 @@ the empty folder itself stays behind.
 
 | | Hotkey | Services menu |
 |---|---|---|
-| Trigger | ⌃⌥D (Polish), ⌃⌥⇧D (Proofread) | select → right-click → Services → **Polish with McGrammar** or **Proofread with McGrammar** |
+| Trigger | ⌃⌥D (Polish), ⌃⌥⇧D (Proofread), ⌃⌥F (Translate) | select → right-click → Services → **Polish with McGrammar**, **Proofread with McGrammar** or **Translate with McGrammar** |
 | Permission | Accessibility required | none |
 | Behaviour | copies the selection, pastes the fix back, restores your clipboard | macOS replaces the selection natively |
 | Confirmation | McGrammar posts the ⌘V itself, so the toast means the paste was delivered | McGrammar hands the text back and macOS replaces the selection afterwards, with no callback — the toast means the text was returned, not that the replacement landed |
 | Caveat | some apps block synthetic keystrokes | the calling app freezes while Claude thinks |
 
 Both exist on purpose: whichever one a given app blocks, the other usually works.
+
+Translate is simpler on both paths: it copies the selection, hands your clipboard straight back,
+and opens the browser. Nothing is pasted, so there is no confirmation toast — the browser coming to
+the front is the signal. The Services item is send-only, needs no permission at all, and appears
+for any text selection, editable or not. Google's page holds 5,000 characters and its URL about
+16 KB; McGrammar never cuts your text, so past the first it opens the page and tells you Google
+kept the first 5,000, and past the second it refuses with a toast rather than open an error page.
 
 The Services item also gets a system shortcut, **⌘⌃⇧G**, remappable under System Settings →
 Keyboard → Keyboard Shortcuts → Services.
@@ -200,9 +214,12 @@ echo "this are a sentense with mistake" | \
 
 ## Privacy
 
-Your text goes to exactly one place: the `claude` process on your machine. McGrammar writes no
-logs, keeps no history, and persists nothing of its own to disk. The clipboard is snapshotted in
-memory only long enough to restore it after a paste.
+Your text goes to exactly one place: the `claude` process on your machine — with one exception you
+have to press a chord for. **⌃⌥F (and the Translate Services item) sends the selection to Google
+Translate, in the URL it opens.** That URL lands in your browser history, and the text reaches
+Google. Nothing else in McGrammar does this, and nothing does it without that gesture. McGrammar
+writes no logs, keeps no history, and persists nothing of its own to disk. The clipboard is
+snapshotted in memory only long enough to restore it after a paste.
 
 One limit of that restore, stated plainly: *promised* clipboard flavours cannot be put back. Some
 apps advertise a type on the pasteboard and only render it when a receiver asks — file promises,
@@ -266,6 +283,7 @@ Sources/McGrammar/
   ServiceProvider.swift   NSServices handler
   TextCapture.swift       clipboard snapshot/restore, synthetic ⌘C/⌘V
   HotKey.swift            Carbon RegisterEventHotKey
+  Translate.swift         the Translate hand-off: URL builder, target language, open
   StatusIcon.swift        menu bar glyph states
   Toast.swift             permission-free HUD notifications
   Transcripts.swift       isolates and deletes the CLI's session transcripts
@@ -277,7 +295,7 @@ Sources/McGrammar/
 
 1. Diff preview HUD before applying (Tab accept / R regenerate / Esc cancel)
 2. Streaming via `--output-format stream-json`
-3. Prompt presets (Fix / Polish / Translate / Casual↔Formal) with per-preset hotkeys
+3. Prompt presets (Fix / Polish / Casual↔Formal) with per-preset hotkeys — Translate shipped as a hand-off instead (ADR 0003)
 4. Opt-in async Services variant that unblocks the calling app
 5. Optional direct-API fallback for sub-second fixes
 6. Per-app tone profiles; fix-line-at-cursor when nothing is selected; notarized releases

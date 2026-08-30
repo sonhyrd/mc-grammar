@@ -9,6 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// a user reaches for when the default did something they did not want. It must not be the one
     /// that is unreachable.
     private let alternateHotKey = HotKey()
+    /// ⌃⌥F — the Translate hand-off. Not a preset: nothing is asked of the CLI and nothing is
+    /// pasted back. See `Translate`.
+    private let translateHotKey = HotKey()
     private let serviceProvider = ServiceProvider()
     private let menu = NSMenu()
 
@@ -16,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var accessibilityItem: NSMenuItem?
     private var standardHotKeyRegistration: HotKeyRegistration = .notAttempted
     private var alternateHotKeyRegistration: HotKeyRegistration = .notAttempted
+    private var translateHotKeyRegistration: HotKeyRegistration = .notAttempted
     private var isBusy = false
 
     /// Bumped whenever the default preset changes, so a future change can notify again instead of
@@ -54,6 +58,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             modifiers: UInt32(controlKey | optionKey | shiftKey)
         ) { [weak self] in
             self?.fixSelection(preset: .alternate)
+        }
+        translateHotKeyRegistration = translateHotKey.register(
+            keyCode: UInt32(kVK_ANSI_F),
+            modifiers: UInt32(controlKey | optionKey)
+        ) { [weak self] in
+            self?.translateSelection()
         }
 
         DispatchQueue.global(qos: .utility).async {
@@ -150,6 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         standardHotKey.unregister()
         alternateHotKey.unregister()
+        translateHotKey.unregister()
     }
 
     // MARK: - Menu
@@ -174,6 +185,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alternateItem.keyEquivalentModifierMask = [.control, .option, .shift]
         alternateItem.target = self
         menu.addItem(alternateItem)
+
+        let translateItem = NSMenuItem(
+            title: "Translate Selected Text",
+            action: #selector(runTranslate),
+            keyEquivalent: "f"
+        )
+        translateItem.keyEquivalentModifierMask = [.control, .option]
+        translateItem.target = self
+        menu.addItem(translateItem)
 
         menu.addItem(.separator())
 
@@ -248,7 +268,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let alternate = alternateHotKeyRegistration.isRegistered
             ? "⌃⌥⇧D active"
             : "⌃⌥⇧D \(alternateHotKeyRegistration.detail)"
-        return "\(standard), \(alternate)"
+        let translate = translateHotKeyRegistration.isRegistered
+            ? "⌃⌥F active"
+            : "⌃⌥F \(translateHotKeyRegistration.detail)"
+        return "\(standard), \(alternate), \(translate)"
     }
 
     // MARK: - Actions
@@ -299,6 +322,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func runAlternatePreset() {
         fixSelection(preset: .alternate)
+    }
+
+    @objc private func runTranslate() {
+        translateSelection()
+    }
+
+    /// The Translate hand-off from ⌃⌥F and the menu item: copy the selection, hand the clipboard
+    /// straight back, open Google Translate. Nothing is pasted, so there is no restore delay to
+    /// wait out and no `.working` state — the browser coming to the front is the success signal,
+    /// which is also why there is no success toast.
+    private func translateSelection() {
+        // Same guard as a fix, for the same reason: this writes the general pasteboard, and
+        // running it during a fix's restore window would snapshot the correction as if it were
+        // the user's clipboard.
+        guard !isBusy else {
+            Toast.shared.show("Already working on a fix…")
+            return
+        }
+        guard TextCapture.hasAccessibilityPermission else {
+            Toast.shared.show(
+                "McGrammar needs Accessibility permission for the hotkey. Grant it in System Settings → Privacy & Security → Accessibility, or use right-click → Services → Translate with McGrammar.",
+                isError: true,
+                duration: 6
+            )
+            TextCapture.requestAccessibilityPermission()
+            return
+        }
+        isBusy = true
+        let snapshot = TextCapture.snapshotPasteboard()
+        let selection = TextCapture.copySelection()
+        TextCapture.restore(snapshot)
+        isBusy = false
+
+        guard let selection else {
+            Toast.shared.show("No text selected — highlight something first.", isError: true)
+            return
+        }
+        Translate.open(selection)
     }
 
     private func fixSelection(preset: Preset) {

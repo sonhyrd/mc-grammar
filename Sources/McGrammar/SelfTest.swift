@@ -38,9 +38,9 @@ enum SelfTest {
             // Every NSMessage must name a selector that actually exists on the provider. A typo
             // here is silent: macOS registers the menu item and the click does nothing.
             let declared = services.compactMap { $0["NSMessage"] as? String }
-            let expected = Preset.allCases.map(\.serviceMessage)
+            let expected = Preset.allCases.map(\.serviceMessage) + [Translate.serviceMessage]
             if Set(declared) == Set(expected) {
-                print("✓  Info.plist declares both services: \(declared.joined(separator: ", "))")
+                print("✓  Info.plist declares every service: \(declared.joined(separator: ", "))")
             } else {
                 print("✗  Info.plist declares \(declared) — expected exactly \(expected)")
                 failures += 1
@@ -61,13 +61,19 @@ enum SelfTest {
             }
 
             // NSReturnTypes is what makes a service replace the selection instead of merely
-            // receiving it. Missing on any one entry and that entry silently stops working.
-            let missingReturnTypes = services.filter { ($0["NSReturnTypes"] as? [String])?.isEmpty ?? true }
-            if missingReturnTypes.isEmpty {
-                print("✓  Every service declares NSReturnTypes (selection replacement will work)")
-            } else {
-                print("✗  \(missingReturnTypes.count) service(s) missing NSReturnTypes — they would be send-only")
-                failures += 1
+            // receiving it. A preset entry without them silently stops working; the Translate
+            // hand-off *with* them would have macOS paste the selection over itself. Both
+            // directions are asserted so neither shape can be "fixed" into the other.
+            for service in services {
+                let message = service["NSMessage"] as? String ?? "?"
+                let hasReturnTypes = !((service["NSReturnTypes"] as? [String])?.isEmpty ?? true)
+                let isHandOff = message == Translate.serviceMessage
+                if hasReturnTypes == !isHandOff {
+                    print("✓  \(message) \(isHandOff ? "is send-only (no NSReturnTypes)" : "declares NSReturnTypes (selection replacement will work)")")
+                } else {
+                    print("✗  \(message) \(isHandOff ? "declares NSReturnTypes — macOS would paste the selection over itself" : "is missing NSReturnTypes — it would be send-only")")
+                    failures += 1
+                }
             }
         } else {
             print("·  Not running from the .app bundle — skipping Info.plist checks.")
@@ -161,6 +167,26 @@ enum SelfTest {
         checks.append(shaping(
             "A selection with no outer whitespace gains none",
             from: "no padding", onto: "no padding", expect: "no padding"
+        ))
+
+        // The Translate URL builder. One input covers every trap at once: `+`, `&`, `=`, a space,
+        // a non-ASCII letter and a newline. No network, no browser.
+        let translateURL = Translate.url(for: "a+b&c=d ế\n", target: "vi").absoluteString
+        let expectedURL = "https://translate.google.com/?sl=auto&tl=vi&text=a%2Bb%26c%3Dd%20%E1%BA%BF%0A&op=translate"
+        checks.append(Check(
+            name: "Translate URL percent-encodes every reserved and non-ASCII character",
+            passed: translateURL == expectedURL,
+            detail: "got \(translateURL)"
+        ))
+
+        // Google answers 400 past ~16 KB of URL, so a selection that size is refused, not opened.
+        // 5,000 ASCII characters (the text-box limit) must still fit.
+        let atLimit = Translate.url(for: String(repeating: "a", count: 5_000), target: "vi")
+        let overLimit = Translate.url(for: String(repeating: "a", count: 17_000), target: "vi")
+        checks.append(Check(
+            name: "Translate refuses a URL Google would reject, and accepts 5,000 ASCII characters",
+            passed: !Translate.exceedsURLLimit(atLimit) && Translate.exceedsURLLimit(overLimit),
+            detail: "at-limit \(atLimit.absoluteString.utf8.count) bytes, over-limit \(overLimit.absoluteString.utf8.count) bytes"
         ))
 
         var blankRejected = false

@@ -82,12 +82,22 @@ if plutil -lint Info.plist >/dev/null 2>&1; then
 else
   fail "Info.plist failed plutil -lint"
 fi
-[ "$(plutil -extract NSServices.0.NSMessage raw Info.plist 2>/dev/null)" = "fixGrammar" ] \
-  && pass "NSMessage=fixGrammar matches the @objc selector" \
-  || fail "NSMessage does not match the ServiceProvider selector"
+# Entry 0 is the default preset (Polish since ADR 0002); the last entry is the send-only
+# Translate hand-off, which must NOT declare NSReturnTypes or macOS would paste the selection
+# over itself. --selftest re-checks both against the Swift source of truth.
+[ "$(plutil -extract NSServices.0.NSMessage raw Info.plist 2>/dev/null)" = "polishText" ] \
+  && pass "NSServices.0 is polishText (the default preset)" \
+  || fail "NSServices.0.NSMessage is not polishText"
 plutil -extract NSServices.0.NSReturnTypes.0 raw Info.plist >/dev/null 2>&1 \
-  && pass "NSReturnTypes declared (selection replacement will work)" \
+  && pass "NSReturnTypes declared on the preset entry (selection replacement will work)" \
   || fail "NSReturnTypes missing — the Service would be send-only"
+LAST=$(( $(plutil -extract NSServices raw Info.plist 2>/dev/null || echo 0) - 1 ))
+[ "$(plutil -extract "NSServices.$LAST.NSMessage" raw Info.plist 2>/dev/null)" = "translateText" ] \
+  && pass "Last NSServices entry is translateText (the Translate hand-off)" \
+  || fail "Last NSServices entry is not translateText"
+plutil -extract "NSServices.$LAST.NSReturnTypes" raw Info.plist >/dev/null 2>&1 \
+  && fail "translateText declares NSReturnTypes — it must be send-only" \
+  || pass "translateText is send-only (no NSReturnTypes)"
 [ "$(plutil -extract LSUIElement raw Info.plist 2>/dev/null)" = "true" ] \
   && pass "LSUIElement=true (menu bar only, no Dock icon)" \
   || fail "LSUIElement is not true"

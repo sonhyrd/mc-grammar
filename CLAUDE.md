@@ -138,8 +138,13 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 - **No `NSKeyEquivalent`.** It used to declare ⌘⌃⇧G, which the app never registered. The Carbon
   hotkeys are the single keyboard mechanism; adding one back binds the same gesture twice on an
   action that irreversibly overwrites the selection.
-- `NSSendTypes` **and** `NSReturnTypes` both `NSStringPboardType`. Removing `NSReturnTypes` makes
-  the service send-only and selection replacement silently stops working.
+- `NSSendTypes` **and** `NSReturnTypes` both `NSStringPboardType` on every **preset** entry.
+  Removing `NSReturnTypes` makes the service send-only and selection replacement silently stops
+  working. The one exception is the **Translate hand-off** (`translateText`, last in the list):
+  it is send-only *by design* — it must never declare `NSReturnTypes`, or macOS pastes the
+  selection over itself — and its handler never writes to any pasteboard. `--selftest` asserts
+  both directions. Its `NSMessage` string lives on `Translate.serviceMessage` and is pinned
+  forever, like `fixGrammar`.
 - `NSTimeout` = `120000` ms. The default is far too short for Claude Code spin-up.
 - Register at launch: `NSApp.servicesProvider = provider; NSUpdateDynamicServices()`.
 - macOS caches the Services menu aggressively — `make-app.sh` runs `pbs -flush`/`-update`, and the
@@ -210,13 +215,31 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
   one easy sample would not have.
 - The Services path cannot be tested from `swift run`; it requires the .app bundle.
 
+### Hand-offs
+- A hand-off (`CONTEXT.md`) sends the selection out and changes nothing in the host app. Translate
+  is the only one. It is **not** a `Preset` — `Preset.alternate`, the `allCases`-driven selftest
+  expectations and `--fix` parsing all assume exactly two — and it never touches `ClaudeRunner`,
+  the workspace or the purge; it must work when the CLI is not installed.
+- It is the one exception to the privacy guarantee: the text goes to Google in the URL. README and
+  `NSHumanReadableCopyright` say so; keep them saying so.
+- The hotkey path takes `isBusy` and needs Accessibility (it writes the general pasteboard for the
+  synthetic ⌘C) and restores the clipboard immediately — there is no ⌘V to outlast. The Services
+  path takes neither: it never touches `NSPasteboard.general`.
+- No success toast — the browser in front is the signal. No `.working` state.
+- **Never truncate.** Two ceilings, both Google's and both measured (ADR 0003): the text box keeps
+  5,000 characters (open anyway, non-error toast); the server answers 400 past ~16 KB of URL
+  (`Translate.maxURLBytes`, refuse with an error toast instead of opening an error page).
+- Encoding: an explicit ASCII unreserved set, never `.alphanumerics` (Unicode — leaves Vietnamese
+  letters raw) or `.urlQueryAllowed` / `queryItems` (leave `+` bare; Google reads it as a space).
+
 ## Roadmap (post-v1, priority order)
 
 1. **Diff preview HUD** before applying: floating panel, Tab = accept, R = regenerate, Esc = cancel.
    Biggest UX win over blind replacement, and worth more now that the default rewrites phrasing.
 2. **Streaming** via `--output-format stream-json` for perceived speed.
 3. ~~**Prompt presets**~~ — Proofread and Polish shipped with per-preset hotkeys (ADR 0002).
-   Remaining: a settings window, and Translate / Casual↔Formal as further presets. A register-shifting
+   Remaining: a settings window, and Casual↔Formal as a further preset. Translate shipped as a
+   **hand-off** (⌃⌥F → Google Translate, ADR 0003), not a preset. A register-shifting
    preset is the one licensed to change what the text says about itself; keep it an explicit choice
    and never a default.
 4. **Async services variant**: return immediately and paste when done. Unblocks the calling app at
