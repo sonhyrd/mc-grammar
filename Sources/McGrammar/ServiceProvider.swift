@@ -54,15 +54,26 @@ final class ServiceProvider: NSObject {
         userData: String?,
         error: AutoreleasingUnsafeMutablePointer<NSString>?
     ) {
-        guard let text = pasteboard.string(forType: .string),
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            error?.pointee = "No text was selected." as NSString
-            Toast.shared.show("Nothing to translate — the selection was empty.", isError: true)
-            return
-        }
+        guard let text = selectedText(on: pasteboard, verb: "translate", error: error) else { return }
         if !Translate.open(text) {
             error?.pointee = "McGrammar could not open your browser." as NSString
         }
+    }
+
+    /// The string macOS handed over, untrimmed — Selection boundaries are contract — or nil with
+    /// the error pointer and a toast set, when there was nothing but whitespace.
+    private func selectedText(
+        on pasteboard: NSPasteboard,
+        verb: String,
+        error: AutoreleasingUnsafeMutablePointer<NSString>?
+    ) -> String? {
+        guard let text = pasteboard.string(forType: .string),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            error?.pointee = "No text was selected." as NSString
+            Toast.shared.show("Nothing to \(verb) — the selection was empty.", isError: true)
+            return nil
+        }
+        return text
     }
 
     private func handle(
@@ -70,12 +81,7 @@ final class ServiceProvider: NSObject {
         preset: Preset,
         error: AutoreleasingUnsafeMutablePointer<NSString>?
     ) {
-        guard let text = pasteboard.string(forType: .string),
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            error?.pointee = "No text was selected." as NSString
-            Toast.shared.show("Nothing to fix — the selection was empty.", isError: true)
-            return
-        }
+        guard let text = selectedText(on: pasteboard, verb: "fix", error: error) else { return }
 
         // mainThreadBlocked: true — this handler calls fixSync synchronously on the main thread
         // right below, so the elapsed-counter timer is allowed to mutate the status button

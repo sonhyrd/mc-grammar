@@ -101,6 +101,14 @@ enum TextCapture {
     /// Simulates ⌘C and returns whatever the focused app put on the pasteboard, or nil if it put
     /// nothing there (no selection, or an app that blocks synthetic keystrokes).
     static func copySelection() -> String? {
+        // Ask before pressing. Code editors — VS Code, Xcode, JetBrains, Zed — copy the whole
+        // current line on ⌘C when nothing is selected, and the pasteboard-changed check below
+        // cannot tell that line from a selection. So a gesture with no selection would translate,
+        // or overwrite, a line of code the user never picked. Only a definite "empty" from the
+        // focused text element blocks; when AX cannot answer (many Electron and sandboxed apps)
+        // this degrades to the ⌘C probe exactly as before.
+        if focusedTextElementHasEmptySelection() { return nil }
+
         let pasteboard = NSPasteboard.general
         let changeCountBefore = pasteboard.changeCount
 
@@ -116,6 +124,28 @@ enum TextCapture {
         let text = pasteboard.string(forType: .string)
         guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return text
+    }
+
+    /// True only when the focused element is a text field or area that reports an empty
+    /// selection. Gated on the role so an app that exposes a bare selected-text attribute on some
+    /// container (web areas, custom views) cannot return a false "empty" and turn a working
+    /// gesture into "No text selected".
+    private static func focusedTextElementHasEmptySelection() -> Bool {
+        var focused: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &focused
+        ) == .success, let focused else { return false }
+        let element = focused as! AXUIElement
+
+        var role: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role) == .success,
+              let role = role as? String,
+              role == kAXTextAreaRole || role == kAXTextFieldRole else { return false }
+
+        var selected: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selected) == .success,
+              let selected = selected as? String else { return false }
+        return selected.isEmpty
     }
 
     /// What `paste` managed to do.

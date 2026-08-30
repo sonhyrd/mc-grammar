@@ -74,6 +74,15 @@ enum SelfTest {
                     print("✗  \(message) \(isHandOff ? "declares NSReturnTypes — macOS would paste the selection over itself" : "is missing NSReturnTypes — it would be send-only")")
                     failures += 1
                 }
+                // Same split for NSTimeout: a preset entry waits on a child process and needs the
+                // long timeout; the hand-off runs none and must not carry it.
+                let hasTimeout = service["NSTimeout"] != nil
+                if hasTimeout == !isHandOff {
+                    print("✓  \(message) \(isHandOff ? "has no NSTimeout (no child process)" : "declares NSTimeout")")
+                } else {
+                    print("✗  \(message) \(isHandOff ? "declares NSTimeout — it runs no child" : "is missing NSTimeout — macOS's default is too short for the CLI")")
+                    failures += 1
+                }
             }
         } else {
             print("·  Not running from the .app bundle — skipping Info.plist checks.")
@@ -181,11 +190,18 @@ enum SelfTest {
 
         // Google answers 400 past ~16 KB of URL, so a selection that size is refused, not opened.
         // 5,000 ASCII characters (the text-box limit) must still fit.
-        let atLimit = Translate.url(for: String(repeating: "a", count: 5_000), target: "vi")
-        let overLimit = Translate.url(for: String(repeating: "a", count: 17_000), target: "vi")
+        // Probed at the exact byte boundary, not somewhere either side of it: pad with "a" (one
+        // byte each, unencoded) until the URL is precisely maxURLBytes long, then add one.
+        let overhead = Translate.url(for: "", target: "vi").absoluteString.utf8.count
+        let atLimit = Translate.url(for: String(repeating: "a", count: Translate.maxURLBytes - overhead), target: "vi")
+        let overLimit = Translate.url(for: String(repeating: "a", count: Translate.maxURLBytes - overhead + 1), target: "vi")
+        let fiveThousand = Translate.url(for: String(repeating: "a", count: Translate.googleCharacterLimit), target: "vi")
         checks.append(Check(
-            name: "Translate refuses a URL Google would reject, and accepts 5,000 ASCII characters",
-            passed: !Translate.exceedsURLLimit(atLimit) && Translate.exceedsURLLimit(overLimit),
+            name: "Translate refuses a URL one byte past Google's limit and accepts one at it",
+            passed: atLimit.absoluteString.utf8.count == Translate.maxURLBytes
+                && !Translate.exceedsURLLimit(atLimit)
+                && Translate.exceedsURLLimit(overLimit)
+                && !Translate.exceedsURLLimit(fiveThousand),
             detail: "at-limit \(atLimit.absoluteString.utf8.count) bytes, over-limit \(overLimit.absoluteString.utf8.count) bytes"
         ))
 

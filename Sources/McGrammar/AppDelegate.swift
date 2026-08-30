@@ -333,49 +333,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// wait out and no `.working` state — the browser coming to the front is the success signal,
     /// which is also why there is no success toast.
     private func translateSelection() {
-        // Same guard as a fix, for the same reason: this writes the general pasteboard, and
-        // running it during a fix's restore window would snapshot the correction as if it were
-        // the user's clipboard.
-        guard !isBusy else {
-            Toast.shared.show("Already working on a fix…")
-            return
-        }
-        guard TextCapture.hasAccessibilityPermission else {
-            Toast.shared.show(
-                "McGrammar needs Accessibility permission for the hotkey. Grant it in System Settings → Privacy & Security → Accessibility, or use right-click → Services → Translate with McGrammar.",
-                isError: true,
-                duration: 6
-            )
-            TextCapture.requestAccessibilityPermission()
-            return
-        }
-        isBusy = true
-        let snapshot = TextCapture.snapshotPasteboard()
-        let selection = TextCapture.copySelection()
+        guard let (selection, snapshot) = captureSelection(
+            permissionHint: ", or use right-click → Services → Translate with McGrammar"
+        ) else { return }
+        // Nothing is pasted, so nothing to outlast: hand the clipboard back and release the guard
+        // before the browser opens.
         TextCapture.restore(snapshot)
         isBusy = false
-
-        guard let selection else {
-            Toast.shared.show("No text selected — highlight something first.", isError: true)
-            return
-        }
         Translate.open(selection)
     }
 
-    private func fixSelection(preset: Preset) {
+    /// The front half every hotkey-path gesture shares: the busy guard, the Accessibility guard,
+    /// then the synthetic ⌘C. On success the caller owns both `isBusy` and the snapshot, and must
+    /// restore and release — a fix after its ⌘V has landed, a hand-off immediately.
+    ///
+    /// `permissionHint` is appended to the Accessibility toast for a gesture that has a
+    /// permission-free Services equivalent worth pointing at.
+    private func captureSelection(permissionHint: String = "") -> (text: String, snapshot: TextCapture.Snapshot)? {
         guard !isBusy else {
             Toast.shared.show("Already working on a fix…")
-            return
+            return nil
         }
 
         guard TextCapture.hasAccessibilityPermission else {
             Toast.shared.show(
-                "McGrammar needs Accessibility permission for the hotkey. Grant it in System Settings → Privacy & Security → Accessibility.",
+                "McGrammar needs Accessibility permission for the hotkey. Grant it in System Settings → Privacy & Security → Accessibility\(permissionHint).",
                 isError: true,
                 duration: 6
             )
             TextCapture.requestAccessibilityPermission()
-            return
+            return nil
         }
 
         // Armed before the pasteboard is touched, not after. `copySelection` pumps the main run
@@ -390,8 +377,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             TextCapture.restore(snapshot)
             isBusy = false
             Toast.shared.show("No text selected — highlight something first.", isError: true)
-            return
+            return nil
         }
+        return (selection, snapshot)
+    }
+
+    private func fixSelection(preset: Preset) {
+        guard let (selection, snapshot) = captureSelection() else { return }
 
         StatusIcon.shared.setState(.working)
 

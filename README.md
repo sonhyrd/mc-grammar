@@ -120,9 +120,6 @@ for any text selection, editable or not. Google's page holds 5,000 characters an
 16 KB; McGrammar never cuts your text, so past the first it opens the page and tells you Google
 kept the first 5,000, and past the second it refuses with a toast rather than open an error page.
 
-The Services item also gets a system shortcut, **⌘⌃⇧G**, remappable under System Settings →
-Keyboard → Keyboard Shortcuts → Services.
-
 ### Where each path works
 
 Because the service declares a return type, macOS only offers it where it can replace what you
