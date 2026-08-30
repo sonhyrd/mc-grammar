@@ -9,15 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// a user reaches for when the default did something they did not want. It must not be the one
     /// that is unreachable.
     private let alternateHotKey = HotKey()
-    /// ⌃⌥T — the Translate hand-off. Not a preset: nothing is asked of the CLI and nothing is
+    /// ⌃⌥F — the Translate hand-off. Not a preset: nothing is asked of the CLI and nothing is
     /// pasted back. See `Translate`.
-    ///
-    /// **T, not F, and the letter is load-bearing.** This shipped as ⌃⌥F and did not fire inside
-    /// text inputs on a machine using the Vietnamese Telex input source — Telex claims `f` as the
-    /// huyền tone key, so the input method takes the keystroke before the hotkey is reached, and
-    /// the failure shows up only where the user is actually typing. Telex also claims
-    /// `s r x j a e o w d`; a future chord must avoid all of them, which is why the two fix
-    /// gestures keep `d` only by grandfathering. Prefer `t b c g h i k l m n p q u v y z`.
     private let translateHotKey = HotKey()
     private let serviceProvider = ServiceProvider()
     private let menu = NSMenu()
@@ -67,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.fixSelection(preset: .alternate)
         }
         translateHotKeyRegistration = translateHotKey.register(
-            keyCode: UInt32(kVK_ANSI_T),
+            keyCode: UInt32(kVK_ANSI_F),
             modifiers: UInt32(controlKey | optionKey)
         ) { [weak self] in
             self?.translateClipboard()
@@ -196,7 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let translateItem = NSMenuItem(
             title: "Translate Clipboard",
             action: #selector(runTranslate),
-            keyEquivalent: "t"
+            keyEquivalent: "f"
         )
         translateItem.keyEquivalentModifierMask = [.control, .option]
         translateItem.target = self
@@ -276,8 +269,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ? "⌃⌥⇧D active"
             : "⌃⌥⇧D \(alternateHotKeyRegistration.detail)"
         let translate = translateHotKeyRegistration.isRegistered
-            ? "⌃⌥T active"
-            : "⌃⌥T \(translateHotKeyRegistration.detail)"
+            ? "⌃⌥F active"
+            : "⌃⌥F \(translateHotKeyRegistration.detail)"
         return "\(standard), \(alternate), \(translate)"
     }
 
@@ -335,11 +328,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         translateClipboard()
     }
 
-    /// The Translate hand-off from ⌃⌥T and the menu item: copy the selection, hand the clipboard
+    /// The Translate hand-off from ⌃⌥F and the menu item: copy the selection, hand the clipboard
     /// straight back, open Google Translate. Nothing is pasted, so there is no restore delay to
     /// wait out and no `.working` state — the browser coming to the front is the success signal,
     /// which is also why there is no success toast.
-    /// The Translate hand-off from ⌃⌥T and the menu item: translate **what is on the clipboard**.
+    /// The Translate hand-off from ⌃⌥F and the menu item: translate **what is on the clipboard**.
     ///
     /// Deliberately not the selection. The gesture is for text you have already copied — often
     /// from somewhere you cannot select in, or copied minutes ago — and reading the clipboard
