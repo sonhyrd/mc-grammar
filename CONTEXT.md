@@ -46,7 +46,7 @@ claim are not the same promise.
 
 ## Trigger path
 
-**A way for a user to start a fix.** There are exactly **two**: the **hotkey path** (a global
+**A way for a user to start a fix or a hand-off.** There are exactly **two**: the **hotkey path** (a global
 Carbon hotkey, drives ⌘C and ⌘V with synthetic events, needs Accessibility permission) and the
 **Services path** (macOS hands over the selection and replaces it natively, needs no permission).
 
@@ -58,6 +58,23 @@ The two paths do not know the same things. The hotkey path posts the keystroke i
 whether it was delivered. The Services path hands the text back and macOS replaces the selection
 afterwards with no callback, so it can only report the handover. Anything user-facing must respect
 that difference rather than flattening it.
+
+## Hand-off
+
+**An action that sends the selection to an external destination and changes nothing in the host
+app.** Not a Fix — nothing is put back — and not a Preset — nothing is asked of the CLI, so there is
+no prompt and no role. In NSServices terms it is *send-only*: it declares what it accepts and
+returns nothing.
+
+## Translate
+
+**The first hand-off**: opens text in Google Translate in the user's browser. Its input differs by
+path, deliberately — ⌃⌥F and the menu item translate **the clipboard**, because the gesture is for
+text already copied and reading the clipboard needs no permission and disturbs nothing; the
+Services entry translates the **Selection**, because that is what macOS hands it. The text
+leaves the machine, through the URL, to Google — the one exception to the guarantee that the user's
+text goes nowhere but their own Claude Code CLI, and the reason the hand-off is a named concept
+rather than a third preset.
 
 ## Selection
 

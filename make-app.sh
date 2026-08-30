@@ -60,10 +60,10 @@ cat <<NOTE
 
 $APP_NAME is running in the menu bar (look for the ✒︎ glyph).
 
-  Hotkey path      ⌃⌥D and ⌃⌥⇧D — need Accessibility permission for McGrammar.app
+  Hotkey path      ⌃⌥D, ⌃⌥⇧D and ⌃⌥F — need Accessibility permission for McGrammar.app
                    System Settings → Privacy & Security → Accessibility
-  Services path    select text → right-click → Services → "Proofread with McGrammar"
-                   or "Polish with McGrammar"
+  Services path    select text → right-click → Services → "Polish with McGrammar",
+                   "Proofread with McGrammar" or "Translate with McGrammar"
                    no permission needed; enable it under
                    System Settings → Keyboard → Keyboard Shortcuts → Services → Text
 

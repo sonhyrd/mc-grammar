@@ -82,9 +82,10 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
   because those seconds block the host application's main thread by design. SIGTERM first, SIGKILL
   after a 5s grace (`killGrace`) if the child ignores it. A tripped watchdog is a timeout, full
   stop — see "Privacy and cleanup" for why `terminationReason` is not also checked.
-- `NSTimeout` in Info.plist stays **120000ms** regardless of the above — it bounds how long macOS
-  waits for the whole Services round trip including its own dispatch overhead, not just the child
-  process, and the default is far too short for Claude Code spin-up.
+- `NSTimeout` in Info.plist stays **120000ms** on every preset entry regardless of the above — it
+  bounds how long macOS waits for the whole Services round trip including its own dispatch
+  overhead, not just the child process, and the default is far too short for Claude Code spin-up.
+  The Translate hand-off entry deliberately has none: it runs no child, so the default is right.
 - `sanitize()` was deleted because `--output-format json` removed the ambiguity it existed to
   resolve, **not** for any shell-safety reason. It was output hygiene — it stripped Markdown fences
   and preamble from the model's raw stdout — and never had anything to do with shell injection.
@@ -138,9 +139,15 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
 - **No `NSKeyEquivalent`.** It used to declare ⌘⌃⇧G, which the app never registered. The Carbon
   hotkeys are the single keyboard mechanism; adding one back binds the same gesture twice on an
   action that irreversibly overwrites the selection.
-- `NSSendTypes` **and** `NSReturnTypes` both `NSStringPboardType`. Removing `NSReturnTypes` makes
-  the service send-only and selection replacement silently stops working.
-- `NSTimeout` = `120000` ms. The default is far too short for Claude Code spin-up.
+- `NSSendTypes` **and** `NSReturnTypes` both `NSStringPboardType` on every **preset** entry.
+  Removing `NSReturnTypes` makes the service send-only and selection replacement silently stops
+  working. The one exception is the **Translate hand-off** (`translateText`, last in the list):
+  it is send-only *by design* — it must never declare `NSReturnTypes`, or macOS pastes the
+  selection over itself — and its handler never writes to any pasteboard. `--selftest` asserts
+  both directions. Its `NSMessage` string lives on `Translate.serviceMessage` and is pinned
+  forever, like `fixGrammar`.
+- `NSTimeout` = `120000` ms on preset entries. The default is far too short for Claude Code
+  spin-up. The hand-off entry omits it — no child process — and `--selftest` asserts that split.
 - Register at launch: `NSApp.servicesProvider = provider; NSUpdateDynamicServices()`.
 - macOS caches the Services menu aggressively — `make-app.sh` runs `pbs -flush`/`-update`, and the
   README documents the manual steps. Do not chase this as a bug.
@@ -160,7 +167,10 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
   never from a terminal-launched binary.
 
 ### Privacy and cleanup
-- Never log, cache, or persist user text anywhere. The README states this as a guarantee.
+- Never log, cache, or persist user text anywhere. The README states this as a guarantee. The one
+  gesture that sends text off the machine is the Translate hand-off (⌃⌥F → Google, in the URL, so
+  it lands in browser history); see "Hand-offs" below. Everything in this section is about the
+  fix paths.
 - The CLI itself persists what the app does not: `claude -p` writes a session transcript containing
   the corrected text under `~/.claude/projects/<cwd slug>/`. The child therefore runs in
   `~/Library/Application Support/McGrammar/cli-workspace` so those transcripts land in a project
@@ -182,6 +192,13 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
   the transcript half of this; do not let it regress.
 
 ### Process and clipboard lifecycle
+- `TextCapture.copySelection` asks Accessibility whether the focused text element's selection is
+  empty **before** posting ⌘C, and returns nil on a definite "empty". Code editors copy the whole
+  current line on ⌘C with nothing selected, and the pasteboard-changed probe alone cannot tell
+  that line from a selection — so without this a bare ⌃⌥F translates, and a bare ⌃⌥D overwrites,
+  a line of code the user never picked. Gated on the text-field/text-area role; when AX cannot
+  answer it degrades to the ⌘C probe. Do not drop the pre-check, and do not widen it past a
+  definite empty answer.
 - If `process.run()` throws, close all three pipe write ends by hand and `group.wait()` before
   returning. No spawn means nothing else will ever close them, and the drain closures would block
   on `read()` forever — a leaked thread and three descriptors per failed launch.
@@ -210,13 +227,44 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
   one easy sample would not have.
 - The Services path cannot be tested from `swift run`; it requires the .app bundle.
 
+### Hotkey chords
+- Every chord's registration outcome stays visible in the menu bar dropdown
+  (`HotKeyRegistration.detail`). A dead hotkey is otherwise indistinguishable from a broken app,
+  which is the whole reason that type exists.
+- ⌃⌥F was once reported as not firing inside text inputs, and moved to ⌃⌥T on the theory that the
+  Vietnamese Simple Telex input source claims `f` as the huyền tone key. **That theory was wrong**
+  — ⌃⌥F was then confirmed working, and the chord moved back. Recorded so the same guess is not
+  made twice: if a chord ever really does die only inside text inputs, verify against a rebuilt
+  bundle first, because a stale `~/Applications/McGrammar.app` produces exactly that symptom.
+
+### Hand-offs
+- A hand-off (`CONTEXT.md`) sends the selection out and changes nothing in the host app. Translate
+  is the only one. It is **not** a `Preset` — `Preset.alternate`, the `allCases`-driven selftest
+  expectations and `--fix` parsing all assume exactly two — and it never touches `ClaudeRunner`,
+  the workspace or the purge; it must work when the CLI is not installed.
+- It is the one exception to the privacy guarantee: the text goes to Google in the URL. README and
+  `NSHumanReadableCopyright` say so; keep them saying so.
+- **Translate's input is the clipboard on the hotkey path and the selection on the Services path,
+  and that asymmetry is deliberate.** ⌃⌥F reads `NSPasteboard.general` and posts no ⌘C: the
+  gesture is for text the user has already copied, so it needs no Accessibility grant, no busy
+  guard and no snapshot/restore, and it cannot disturb the pasteboard. The Services entry gets the
+  selection because that is what macOS hands it. Do not "unify" these onto the selection — the
+  permission-free, side-effect-free hotkey is the point.
+- No success toast — the browser in front is the signal. No `.working` state.
+- **Never truncate.** Two ceilings, both Google's and both measured (ADR 0003): the text box keeps
+  5,000 characters (open anyway, non-error toast); the server answers 400 past ~16 KB of URL
+  (`Translate.maxURLBytes`, refuse with an error toast instead of opening an error page).
+- Encoding: an explicit ASCII unreserved set, never `.alphanumerics` (Unicode — leaves Vietnamese
+  letters raw) or `.urlQueryAllowed` / `queryItems` (leave `+` bare; Google reads it as a space).
+
 ## Roadmap (post-v1, priority order)
 
 1. **Diff preview HUD** before applying: floating panel, Tab = accept, R = regenerate, Esc = cancel.
    Biggest UX win over blind replacement, and worth more now that the default rewrites phrasing.
 2. **Streaming** via `--output-format stream-json` for perceived speed.
 3. ~~**Prompt presets**~~ — Proofread and Polish shipped with per-preset hotkeys (ADR 0002).
-   Remaining: a settings window, and Translate / Casual↔Formal as further presets. A register-shifting
+   Remaining: a settings window, and Casual↔Formal as a further preset. Translate shipped as a
+   **hand-off** (⌃⌥F → Google Translate, ADR 0003), not a preset. A register-shifting
    preset is the one licensed to change what the text says about itself; keep it an explicit choice
    and never a default.
 4. **Async services variant**: return immediately and paste when done. Unblocks the calling app at
