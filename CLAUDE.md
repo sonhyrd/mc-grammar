@@ -234,9 +234,12 @@ $0.0003) and roughly 2.6x the latency. Removing a flag here is a regression, not
   the workspace or the purge; it must work when the CLI is not installed.
 - It is the one exception to the privacy guarantee: the text goes to Google in the URL. README and
   `NSHumanReadableCopyright` say so; keep them saying so.
-- The hotkey path takes `isBusy` and needs Accessibility (it writes the general pasteboard for the
-  synthetic ⌘C) and restores the clipboard immediately — there is no ⌘V to outlast. The Services
-  path takes neither: it never touches `NSPasteboard.general`.
+- **Translate's input is the clipboard on the hotkey path and the selection on the Services path,
+  and that asymmetry is deliberate.** ⌃⌥F reads `NSPasteboard.general` and posts no ⌘C: the
+  gesture is for text the user has already copied, so it needs no Accessibility grant, no busy
+  guard and no snapshot/restore, and it cannot disturb the pasteboard. The Services entry gets the
+  selection because that is what macOS hands it. Do not "unify" these onto the selection — the
+  permission-free, side-effect-free hotkey is the point.
 - No success toast — the browser in front is the signal. No `.working` state.
 - **Never truncate.** Two ceilings, both Google's and both measured (ADR 0003): the text box keeps
   5,000 characters (open anyway, non-error toast); the server answers 400 past ~16 KB of URL

@@ -14,8 +14,8 @@ place. Two presets:
 
 And one **hand-off**, which changes nothing in the app you are in:
 
-- **Translate** (⌃⌥F) — opens the selection in Google Translate in your browser, source language
-  detected, Vietnamese as the target (`defaults write com.zernonia.mcgrammar TranslateTarget ja`
+- **Translate** (⌃⌥F) — opens **whatever is on your clipboard** in Google Translate in your
+  browser, source language detected, Vietnamese as the target (`defaults write com.zernonia.mcgrammar TranslateTarget ja`
   to change it). No Claude involved. This is the one gesture that sends your text somewhere other
   than your own CLI — see Privacy.
 
@@ -105,7 +105,7 @@ the empty folder itself stays behind.
 
 | | Hotkey | Services menu |
 |---|---|---|
-| Trigger | ⌃⌥D (Polish), ⌃⌥⇧D (Proofread), ⌃⌥F (Translate) | select → right-click → Services → **Polish with McGrammar**, **Proofread with McGrammar** or **Translate with McGrammar** |
+| Trigger | ⌃⌥D (Polish), ⌃⌥⇧D (Proofread), ⌃⌥F (Translate — clipboard) | select → right-click → Services → **Polish with McGrammar**, **Proofread with McGrammar** or **Translate with McGrammar** |
 | Permission | Accessibility required | none |
 | Behaviour | copies the selection, pastes the fix back, restores your clipboard | macOS replaces the selection natively |
 | Confirmation | McGrammar posts the ⌘V itself, so the toast means the paste was delivered | McGrammar hands the text back and macOS replaces the selection afterwards, with no callback — the toast means the text was returned, not that the replacement landed |
@@ -113,10 +113,12 @@ the empty folder itself stays behind.
 
 Both exist on purpose: whichever one a given app blocks, the other usually works.
 
-Translate is simpler on both paths: it copies the selection, hands your clipboard straight back,
-and opens the browser. Nothing is pasted, so there is no confirmation toast — the browser coming to
-the front is the signal. The Services item is send-only, needs no permission at all, and appears
-for any text selection, editable or not. Google's page holds 5,000 characters and its URL about
+Translate takes a different input on each path, on purpose. **⌃⌥F translates your clipboard**: copy
+anything, anywhere, then press it. It posts no keystroke, needs no Accessibility grant, and leaves
+the pasteboard exactly as it found it. The Services item translates the **selection**, because that
+is what macOS hands it; it is send-only, needs no permission either, and appears for any text
+selection, editable or not. Neither pastes anything, so there is no confirmation toast — the
+browser coming to the front is the signal. Google's page holds 5,000 characters and its URL about
 16 KB; McGrammar never cuts your text, so past the first it opens the page and tells you Google
 kept the first 5,000, and past the second it refuses with a toast rather than open an error page.
 
@@ -212,8 +214,8 @@ echo "this are a sentense with mistake" | \
 ## Privacy
 
 Your text goes to exactly one place: the `claude` process on your machine — with one exception you
-have to press a chord for. **⌃⌥F (and the Translate Services item) sends the selection to Google
-Translate, in the URL it opens.** That URL lands in your browser history, and the text reaches
+have to press a chord for. **⌃⌥F sends your clipboard — and the Translate Services item your
+selection — to Google Translate, in the URL it opens.** That URL lands in your browser history, and the text reaches
 Google. Nothing else in McGrammar does this, and nothing does it without that gesture. McGrammar
 writes no logs, keeps no history, and persists nothing of its own to disk. The clipboard is
 snapshotted in memory only long enough to restore it after a paste.

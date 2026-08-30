@@ -63,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyCode: UInt32(kVK_ANSI_F),
             modifiers: UInt32(controlKey | optionKey)
         ) { [weak self] in
-            self?.translateSelection()
+            self?.translateClipboard()
         }
 
         DispatchQueue.global(qos: .utility).async {
@@ -187,7 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(alternateItem)
 
         let translateItem = NSMenuItem(
-            title: "Translate Selected Text",
+            title: "Translate Clipboard",
             action: #selector(runTranslate),
             keyEquivalent: "f"
         )
@@ -325,22 +325,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func runTranslate() {
-        translateSelection()
+        translateClipboard()
     }
 
     /// The Translate hand-off from ⌃⌥F and the menu item: copy the selection, hand the clipboard
     /// straight back, open Google Translate. Nothing is pasted, so there is no restore delay to
     /// wait out and no `.working` state — the browser coming to the front is the success signal,
     /// which is also why there is no success toast.
-    private func translateSelection() {
-        guard let (selection, snapshot) = captureSelection(
-            permissionHint: ", or use right-click → Services → Translate with McGrammar"
-        ) else { return }
-        // Nothing is pasted, so nothing to outlast: hand the clipboard back and release the guard
-        // before the browser opens.
-        TextCapture.restore(snapshot)
-        isBusy = false
-        Translate.open(selection)
+    /// The Translate hand-off from ⌃⌥F and the menu item: translate **what is on the clipboard**.
+    ///
+    /// Deliberately not the selection. The gesture is for text you have already copied — often
+    /// from somewhere you cannot select in, or copied minutes ago — and reading the clipboard
+    /// makes it the one gesture that needs no Accessibility grant, posts no synthetic keystroke,
+    /// and cannot disturb the pasteboard. Nothing is written, so there is no busy guard and
+    /// nothing to restore. The Services entry still translates the *selection*, because that is
+    /// what macOS hands it; the two are different inputs on purpose.
+    private func translateClipboard() {
+        guard let text = NSPasteboard.general.string(forType: .string),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            Toast.shared.show("Clipboard is empty — copy some text first.", isError: true)
+            return
+        }
+        Translate.open(text)
     }
 
     /// The front half every hotkey-path gesture shares: the busy guard, the Accessibility guard,
